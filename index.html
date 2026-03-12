@@ -418,7 +418,7 @@
             <button id="start-btn" class="action-btn green-btn">PLAY</button>
             <button id="gamemodes-btn" class="action-btn green-btn">GAMEMODES</button>
             <button id="settings-btn" class="action-btn green-btn">SETTINGS</button>
-            <div id="version-text">Version 1.0</div>
+            <div id="version-text">Version 1.1</div>
         </div>
 
         <!-- 2. Settings Menu -->
@@ -490,7 +490,7 @@
         <!-- 6. Pause Screen -->
         <div id="pause-screen" class="overlay-screen">
             <h1>PAUSED</h1>
-            <p>Press ESC to resume</p>
+            <p id="pause-text">Press ESC to resume</p>
             <button id="resume-btn" class="action-btn green-btn">RESUME</button>
             <button id="pause-main-menu-btn" class="action-btn">Return to main menu</button>
         </div>
@@ -541,6 +541,9 @@
         const mapSelect = document.getElementById('map-select');
         const applesSelect = document.getElementById('apples-select');
 
+        // Controller Element nodes (needed early for context-based instructions)
+        const badgeEl = document.getElementById('controller-badge');
+
         // Game Configuration Variables
         let COLS = 17;
         let ROWS = 15;
@@ -587,8 +590,47 @@
             }
         };
 
-        // --- Core Application Functions ---
+        // --- LocalStorage Persistence Functions ---
+        function saveSettings() {
+            try {
+                localStorage.setItem('snake_speed', speedSelect.value);
+                localStorage.setItem('snake_map', mapSelect.value);
+                localStorage.setItem('snake_apples', applesSelect.value);
+                localStorage.setItem('snake_gamemode', currentGamemode);
+            } catch(e) { console.warn("Could not save settings", e); }
+        }
 
+        function loadSettings() {
+            try {
+                const savedSpeed = localStorage.getItem('snake_speed');
+                if (savedSpeed) speedSelect.value = savedSpeed;
+                
+                const savedMap = localStorage.getItem('snake_map');
+                if (savedMap) mapSelect.value = savedMap;
+                
+                const savedApples = localStorage.getItem('snake_apples');
+                if (savedApples) applesSelect.value = savedApples;
+                
+                const savedGamemode = localStorage.getItem('snake_gamemode');
+                if (savedGamemode) {
+                    currentGamemode = savedGamemode;
+                    gamemodeRows.forEach(r => {
+                        if (r.getAttribute('data-mode') === currentGamemode) {
+                            r.classList.add('active');
+                        } else {
+                            r.classList.remove('active');
+                        }
+                    });
+                }
+            } catch(e) { console.warn("Could not load settings", e); }
+        }
+
+        // Attach listeners for persistence
+        speedSelect.addEventListener('change', saveSettings);
+        mapSelect.addEventListener('change', saveSettings);
+        applesSelect.addEventListener('change', saveSettings);
+
+        // --- Core Application Functions ---
         function prepareBoard(isStartingPlay = false) {
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
             if (confettiAnimationFrame) cancelAnimationFrame(confettiAnimationFrame);
@@ -668,6 +710,20 @@
 
         function pauseGame() {
             isPaused = true;
+
+            // Generate context-appropriate pause instructions
+            const pauseText = document.getElementById('pause-text');
+            const hasGamepad = badgeEl && badgeEl.classList.contains('visible');
+            const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+            if (hasGamepad) {
+                pauseText.innerText = "Press START, X, or ESC to resume";
+            } else if (isTouch) {
+                pauseText.innerText = "Tap screen to resume";
+            } else {
+                pauseText.innerText = "Press ESC to resume";
+            }
+
             pauseScreen.style.display = 'flex';
             renderStaticFrame();
         }
@@ -958,6 +1014,7 @@
             
             vertices.push({ x: hx, y: hy });
 
+            // 1. Draw Base Green Body Stroke
             ctx.beginPath();
             ctx.moveTo((vertices[0].x + 0.5) * TILE_SIZE, (vertices[0].y + 0.5) * TILE_SIZE);
             for (let i = 1; i < vertices.length; i++) {
@@ -970,10 +1027,62 @@
             ctx.lineJoin = 'round';
             ctx.stroke();
 
+            // 2. Draw Scales/Texture Overlay using dashed lines anchored to the grid progression
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo((vertices[0].x + 0.5) * TILE_SIZE, (vertices[0].y + 0.5) * TILE_SIZE);
+            for (let i = 1; i < vertices.length; i++) {
+                ctx.lineTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
+            }
+            
+            // Major scale bounds
+            ctx.strokeStyle = '#66BB6A'; 
+            ctx.lineWidth = TILE_SIZE * 0.5; 
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.setLineDash([TILE_SIZE * 0.3, TILE_SIZE * 0.7]);
+            ctx.lineDashOffset = TILE_SIZE * 0.15;
+            ctx.stroke();
+
+            // Minor scale dot
+            ctx.strokeStyle = '#388E3C'; 
+            ctx.lineWidth = TILE_SIZE * 0.2; 
+            ctx.setLineDash([TILE_SIZE * 0.1, TILE_SIZE * 0.9]);
+            ctx.lineDashOffset = TILE_SIZE * 0.05;
+            ctx.stroke();
+            ctx.restore();
+
+            // 3. Draw Base Head
             ctx.beginPath();
             ctx.arc((hx + 0.5) * TILE_SIZE, (hy + 0.5) * TILE_SIZE, (TILE_SIZE * 0.8) / 2, 0, Math.PI * 2);
             ctx.fillStyle = '#4CAF50'; 
             ctx.fill();
+
+            // 4. Draw Eyes matching orientation
+            let angle = Math.atan2(hdy, hdx);
+            ctx.save();
+            // Move origin to the head's center
+            ctx.translate((hx + 0.5) * TILE_SIZE, (hy + 0.5) * TILE_SIZE);
+            // Rotate towards the direction the head is facing
+            ctx.rotate(angle);
+
+            // Sclera (White background)
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            // Top eye
+            ctx.arc(TILE_SIZE * 0.1, -TILE_SIZE * 0.2, TILE_SIZE * 0.12, 0, Math.PI * 2);
+            // Bottom eye
+            ctx.arc(TILE_SIZE * 0.1, TILE_SIZE * 0.2, TILE_SIZE * 0.12, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Pupils (Black dots looking slightly forward)
+            ctx.fillStyle = '#000000';
+            ctx.beginPath();
+            ctx.arc(TILE_SIZE * 0.14, -TILE_SIZE * 0.2, TILE_SIZE * 0.06, 0, Math.PI * 2);
+            ctx.arc(TILE_SIZE * 0.14, TILE_SIZE * 0.2, TILE_SIZE * 0.06, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
         }
 
         function renderStaticFrame() {
@@ -1134,6 +1243,8 @@
                 row.classList.add('active');
                 // Set the current mode
                 currentGamemode = row.getAttribute('data-mode');
+                // Persist new gamemode settings
+                saveSettings();
             });
         });
 
@@ -1152,6 +1263,8 @@
         resumeBtn.addEventListener('click', resumeGame);
         pauseMainMenuBtn.addEventListener('click', resetToMainMenu);
 
+        // Inject initial data and boot
+        loadSettings();
         prepareBoard(false);
 
         // ================================================================
@@ -1249,7 +1362,6 @@
         // ================================================================
 
         const cursorEl    = document.getElementById('controller-cursor');
-        const badgeEl     = document.getElementById('controller-badge');
         const gameContainer = document.getElementById('game-container');
 
         // Cursor position (relative to game-container)
