@@ -286,9 +286,10 @@
         }
 
         #game-win-screen {
-            background-color: rgba(0, 0, 0, 0.85);
+            background-color: transparent; /* Changed to transparent so confetti isn't dimmed */
             justify-content: center;
             padding: 20px;
+            z-index: 30; /* Ensure text and buttons sit above confetti */
         }
 
         #game-win-screen h1 {
@@ -297,7 +298,6 @@
             color: #ffd700; 
             text-shadow: 2px 2px 10px rgba(255, 215, 0, 0.5);
             margin-bottom: clamp(20px, 6vmin, 30px);
-            z-index: 30; 
             text-align: center;
         }
 
@@ -305,7 +305,6 @@
             font-size: clamp(1.5rem, 6vmin, 2.5rem);
             padding: clamp(10px, 3vmin, 15px);
             margin-bottom: 15px;
-            z-index: 30;
         }
 
         #win-main-menu-btn {
@@ -313,7 +312,6 @@
             padding: clamp(8px, 2vmin, 12px) 15px;
             background-color: #ff9800;
             border: 6px solid #e65100;
-            z-index: 30;
         }
 
         #pause-screen {
@@ -359,7 +357,8 @@
             width: 100%;
             height: 100%;
             pointer-events: none; 
-            z-index: 25; 
+            z-index: 25; /* Placed exactly between gameboard and win text */
+            background-color: rgba(0, 0, 0, 0.85); /* Provides the dimming effect */
             display: none;
         }
 
@@ -418,7 +417,7 @@
             <button id="start-btn" class="action-btn green-btn">PLAY</button>
             <button id="gamemodes-btn" class="action-btn green-btn">GAMEMODES</button>
             <button id="settings-btn" class="action-btn green-btn">SETTINGS</button>
-            <div id="version-text">Version 1.1</div>
+            <div id="version-text">Version 1.2</div>
         </div>
 
         <!-- 2. Settings Menu -->
@@ -468,6 +467,10 @@
                 </div>
                 <div class="menu-row gamemode-btn" data-mode="AllApples">
                     <span class="row-label" style="font-size: clamp(1rem, 4vmin, 1.3rem);">All Tiles are Apples</span>
+                    <div class="checkbox"><span class="checkmark">&#10004;</span></div>
+                </div>
+                <div class="menu-row gamemode-btn" data-mode="Invincible">
+                    <span class="row-label">Invincible</span>
                     <div class="checkbox"><span class="checkmark">&#10004;</span></div>
                 </div>
             </div>
@@ -548,17 +551,17 @@
         let COLS = 17;
         let ROWS = 15;
         const TILE_SIZE = 30; 
-        let TICK_RATE = 130; 
+        let TICK_RATE = 100; // Tweaked for faster default gameplay
 
         // Game State Variables
-        let snake =[];
+        let snake = [];
         let previousSnake =[]; 
         let apples =[]; 
         let dx = 0; 
         let dy = 0;
         let directionQueue =[]; 
         let score = 0;
-        let currentGamemode = 'Normal';
+        let activeGamemodes = ['Normal'];
         
         let animationFrameId;
         let lastTickTime = 0;
@@ -581,6 +584,12 @@
         const moveSound = new Audio('https://files.catbox.moe/a7zbmf.mp3');
         moveSound.preload = 'auto';
 
+        const btnClickSound = new Audio('https://files.catbox.moe/qkdx2g.mp3');
+        btnClickSound.preload = 'auto';
+
+        const btnBackSound = new Audio('https://files.catbox.moe/4js59q.mp3');
+        btnBackSound.preload = 'auto';
+
         const appleImg = new Image();
         appleImg.src = 'https://i.postimg.cc/68MD7tyQ/b6169439-332e-4c16-9d95-76a8652bbdf6-removalai-preview.png';
 
@@ -590,13 +599,48 @@
             }
         };
 
+        // UI Button Sound System
+        function playBtnSound(isBack = false) {
+            let s = isBack ? btnBackSound.cloneNode(true) : btnClickSound.cloneNode(true);
+            s.play().catch(e => console.log("Audio play prevented:", e));
+        }
+
+        document.querySelectorAll('.action-btn, .gamemode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = btn.id || '';
+                if (id.includes('back') || id.includes('main-menu')) {
+                    playBtnSound(true);
+                } else {
+                    playBtnSound(false);
+                }
+            });
+        });
+
+        // Controller Rumble Helper
+        function vibrateGamepad(duration, strongMag, weakMag) {
+            try {
+                const gamepads = navigator.getGamepads ? navigator.getGamepads() :[];
+                for (let i = 0; i < gamepads.length; i++) {
+                    const gp = gamepads[i];
+                    if (gp && gp.vibrationActuator && gp.vibrationActuator.type === "dual-rumble") {
+                        gp.vibrationActuator.playEffect("dual-rumble", {
+                            startDelay: 0,
+                            duration: duration,
+                            weakMagnitude: weakMag,
+                            strongMagnitude: strongMag
+                        }).catch(e => {}); // ignore promise rejection
+                    }
+                }
+            } catch(e) {}
+        }
+
         // --- LocalStorage Persistence Functions ---
         function saveSettings() {
             try {
                 localStorage.setItem('snake_speed', speedSelect.value);
                 localStorage.setItem('snake_map', mapSelect.value);
                 localStorage.setItem('snake_apples', applesSelect.value);
-                localStorage.setItem('snake_gamemode', currentGamemode);
+                localStorage.setItem('snake_gamemodes', JSON.stringify(activeGamemodes));
             } catch(e) { console.warn("Could not save settings", e); }
         }
 
@@ -611,18 +655,27 @@
                 const savedApples = localStorage.getItem('snake_apples');
                 if (savedApples) applesSelect.value = savedApples;
                 
-                const savedGamemode = localStorage.getItem('snake_gamemode');
-                if (savedGamemode) {
-                    currentGamemode = savedGamemode;
-                    gamemodeRows.forEach(r => {
-                        if (r.getAttribute('data-mode') === currentGamemode) {
-                            r.classList.add('active');
-                        } else {
-                            r.classList.remove('active');
-                        }
-                    });
+                const savedGamemodesStr = localStorage.getItem('snake_gamemodes');
+                if (savedGamemodesStr) {
+                    activeGamemodes = JSON.parse(savedGamemodesStr);
+                } else {
+                    const oldGamemode = localStorage.getItem('snake_gamemode');
+                    if (oldGamemode && ['Normal', 'AllApples'].includes(oldGamemode)) {
+                        activeGamemodes = [oldGamemode];
+                    }
                 }
+                updateGamemodeUI();
             } catch(e) { console.warn("Could not load settings", e); }
+        }
+
+        function updateGamemodeUI() {
+            gamemodeRows.forEach(r => {
+                if (activeGamemodes.includes(r.getAttribute('data-mode'))) {
+                    r.classList.add('active');
+                } else {
+                    r.classList.remove('active');
+                }
+            });
         }
 
         // Attach listeners for persistence
@@ -638,8 +691,8 @@
             // Toggle scoreboard visibility
             scoreboard.style.visibility = isStartingPlay ? 'visible' : 'hidden';
 
-            // 1. Apply Chosen Settings
-            const speedMap = { 'Slow': 260, 'Normal': 130, 'Fast': 65 };
+            // 1. Apply Chosen Settings - Sped up game generally
+            const speedMap = { 'Slow': 200, 'Normal': 100, 'Fast': 50 };
             const mapMap = {
                 'Small': { c: 9, r: 10 },
                 'Normal': { c: 17, r: 15 },
@@ -677,7 +730,7 @@
             
             // 3. Initialize Apples safely depending on Gamemode
             apples =[];
-            if (currentGamemode === 'AllApples') {
+            if (activeGamemodes.includes('AllApples')) {
                 // Fill all empty tiles with apples
                 for (let x = 0; x < COLS; x++) {
                     for (let y = 0; y < ROWS; y++) {
@@ -702,8 +755,8 @@
         function updateScoreDisplay() {
             scoreElement.innerText = score;
             const applesVal = applesSelect.value;
-            // Includes settings AND gamemode in the key
-            const key = `snakeHighScore_${speedSelect.value}_${mapSelect.value}_${applesVal}_${currentGamemode}`;
+            // Includes settings AND gamemodes in the key
+            const key = `snakeHighScore_${speedSelect.value}_${mapSelect.value}_${applesVal}_${activeGamemodes.slice().sort().join('-')}`;
             let highScore = localStorage.getItem(key) || 0;
             highScoreElement.innerText = highScore;
         }
@@ -748,6 +801,8 @@
             unlockAudio(eatSound);
             unlockAudio(winSound);
             unlockAudio(moveSound);
+            unlockAudio(btnClickSound);
+            unlockAudio(btnBackSound);
             // -------------------------------
 
             startScreen.style.display = 'none';
@@ -814,24 +869,38 @@
 
             const head = { x: snake[0].x + nextDx, y: snake[0].y + nextDy };
 
+            const isInvincible = activeGamemodes.includes('Invincible');
+
+            if (isInvincible) {
+                if (head.x < 0) head.x = COLS - 1;
+                else if (head.x >= COLS) head.x = 0;
+                
+                if (head.y < 0) head.y = ROWS - 1;
+                else if (head.y >= ROWS) head.y = 0;
+            }
+
             const hitLeftWall = head.x < 0;
             const hitRightWall = head.x >= COLS;
             const hitTopWall = head.y < 0;
             const hitBottomWall = head.y >= ROWS;
 
             let hitSelf = false;
-            for (let i = 0; i < snake.length; i++) {
-                if (snake[i].x === head.x && snake[i].y === head.y) {
-                    if (i === snake.length - 1) {
-                        let appleCollision = apples.some(a => head.x === a.x && head.y === a.y);
-                        if (!appleCollision) continue; 
+            if (!isInvincible) {
+                for (let i = 0; i < snake.length; i++) {
+                    if (snake[i].x === head.x && snake[i].y === head.y) {
+                        if (i === snake.length - 1) {
+                            let appleCollision = apples.some(a => head.x === a.x && head.y === a.y);
+                            if (!appleCollision) continue; 
+                        }
+                        hitSelf = true;
+                        break;
                     }
-                    hitSelf = true;
-                    break;
                 }
             }
 
-            if (hitLeftWall || hitRightWall || hitTopWall || hitBottomWall || hitSelf) {
+            if (!isInvincible && (hitLeftWall || hitRightWall || hitTopWall || hitBottomWall || hitSelf)) {
+                vibrateGamepad(400, 1.0, 1.0); // Death rumble
+                
                 // Play custom sound on death
                 deathSound.currentTime = 0; 
                 deathSound.play().catch(e => console.log("Audio play prevented:", e));
@@ -855,6 +924,8 @@
             }
 
             if (ateAppleIndex !== -1) {
+                vibrateGamepad(100, 0.0, 0.5); // Eat rumble
+
                 // Play eating sound overlapping multiple times
                 let eatClone = eatSound.cloneNode(true);
                 eatClone.play().catch(e => console.log("Audio play prevented:", e));
@@ -862,7 +933,7 @@
                 score++;
                 
                 const applesVal = applesSelect.value;
-                const key = `snakeHighScore_${speedSelect.value}_${mapSelect.value}_${applesVal}_${currentGamemode}`;
+                const key = `snakeHighScore_${speedSelect.value}_${mapSelect.value}_${applesVal}_${activeGamemodes.slice().sort().join('-')}`;
                 let currentHigh = localStorage.getItem(key) || 0;
                 
                 if (score > currentHigh) {
@@ -879,9 +950,7 @@
                     return;
                 }
 
-                // Normal Mode: Replace eaten apple if there's free space
-                // AllApples Mode: Do NOT replace the apple, board just empties out
-                if (currentGamemode === 'Normal') {
+                if (!activeGamemodes.includes('AllApples')) {
                     let newApple = createApple(false);
                     if (newApple) {
                         apples.push(newApple);
@@ -894,6 +963,8 @@
 
         // --- Confetti Generation System ---
         function triggerWin() {
+            vibrateGamepad(1000, 0.8, 0.8); // Win rumble
+
             // Play win sound
             winSound.currentTime = 0;
             winSound.play().catch(e => console.log("Audio play prevented:", e));
@@ -996,60 +1067,116 @@
             let last = curr.length - 1;
             let prevLast = prev.length - 1;
             
+            // 1. Interpolate tail
             let tdx = curr[last].x - prev[prevLast].x;
             let tdy = curr[last].y - prev[prevLast].y;
+            
+            let tWrap = Math.abs(tdx) > 1 || Math.abs(tdy) > 1;
+            if (tWrap) {
+                if (tdx < -1) tdx = 1; else if (tdx > 1) tdx = -1;
+                if (tdy < -1) tdy = 1; else if (tdy > 1) tdy = -1;
+            }
+            
             let tx = prev[prevLast].x + tdx * progress;
             let ty = prev[prevLast].y + tdy * progress;
             
             vertices.push({ x: tx, y: ty });
-
-            for (let i = last; i >= 1; i--) {
-                vertices.push({ x: curr[i].x, y: curr[i].y });
+            
+            if (tWrap) {
+                // Bridge from off-screen
+                vertices.push({ x: prev[prevLast].x + tdx, y: prev[prevLast].y + tdy });
+                let incomingTx = curr[last].x - tdx * (1 - progress);
+                let incomingTy = curr[last].y - tdy * (1 - progress);
+                vertices.push({ x: incomingTx, y: incomingTy, break: true });
             }
 
+            // 2. Add middle body parts, explicitly checking for wraps between segments
+            for (let i = last; i >= 2; i--) {
+                vertices.push({ x: curr[i].x, y: curr[i].y });
+                
+                let bdx = curr[i-1].x - curr[i].x;
+                let bdy = curr[i-1].y - curr[i].y;
+                if (Math.abs(bdx) > 1 || Math.abs(bdy) > 1) {
+                    if (bdx < -1) bdx = 1; else if (bdx > 1) bdx = -1;
+                    if (bdy < -1) bdy = 1; else if (bdy > 1) bdy = -1;
+                    
+                    vertices.push({ x: curr[i].x + bdx, y: curr[i].y + bdy });
+                    vertices.push({ x: curr[i-1].x - bdx, y: curr[i-1].y - bdy, break: true });
+                }
+            }
+            
+            if (last >= 1) {
+                vertices.push({ x: curr[1].x, y: curr[1].y });
+            }
+
+            // 3. Interpolate Head
             let hdx = curr[0].x - curr[1].x;
             let hdy = curr[0].y - curr[1].y;
-            let hx = curr[1].x + hdx * progress;
-            let hy = curr[1].y + hdy * progress;
+            let hWrap = Math.abs(hdx) > 1 || Math.abs(hdy) > 1;
             
-            vertices.push({ x: hx, y: hy });
+            let hx, hy;
+            if (hWrap) {
+                if (hdx < -1) hdx = 1; else if (hdx > 1) hdx = -1;
+                if (hdy < -1) hdy = 1; else if (hdy > 1) hdy = -1;
+                
+                let hx_off = curr[1].x + hdx * progress;
+                let hy_off = curr[1].y + hdy * progress;
+                vertices.push({ x: hx_off, y: hy_off });
+                
+                // Construct the visual point entering from the wrapped edge
+                let incomingHx = curr[0].x - hdx * (1 - progress);
+                let incomingHy = curr[0].y - hdy * (1 - progress);
+                vertices.push({ x: incomingHx, y: incomingHy, break: true });
+                
+                hx = incomingHx;
+                hy = incomingHy;
+            } else {
+                hx = curr[1].x + hdx * progress;
+                hy = curr[1].y + hdy * progress;
+                vertices.push({ x: hx, y: hy });
+            }
+
+            // --- Helper to render paths robustly splitting lines across screen wraps ---
+            const drawBrokenPath = () => {
+                ctx.beginPath();
+                ctx.moveTo((vertices[0].x + 0.5) * TILE_SIZE, (vertices[0].y + 0.5) * TILE_SIZE);
+                for (let i = 1; i < vertices.length; i++) {
+                    if (vertices[i].break) {
+                        ctx.stroke();
+                        ctx.beginPath();
+                        ctx.moveTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
+                    } else {
+                        ctx.lineTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
+                    }
+                }
+                ctx.stroke();
+            };
 
             // 1. Draw Base Green Body Stroke
-            ctx.beginPath();
-            ctx.moveTo((vertices[0].x + 0.5) * TILE_SIZE, (vertices[0].y + 0.5) * TILE_SIZE);
-            for (let i = 1; i < vertices.length; i++) {
-                ctx.lineTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
-            }
-            
             ctx.strokeStyle = '#81C784'; 
             ctx.lineWidth = TILE_SIZE * 0.8; 
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            ctx.stroke();
+            drawBrokenPath();
 
             // 2. Draw Scales/Texture Overlay using dashed lines anchored to the grid progression
             ctx.save();
-            ctx.beginPath();
-            ctx.moveTo((vertices[0].x + 0.5) * TILE_SIZE, (vertices[0].y + 0.5) * TILE_SIZE);
-            for (let i = 1; i < vertices.length; i++) {
-                ctx.lineTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
-            }
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
             
             // Major scale bounds
             ctx.strokeStyle = '#66BB6A'; 
             ctx.lineWidth = TILE_SIZE * 0.5; 
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
             ctx.setLineDash([TILE_SIZE * 0.3, TILE_SIZE * 0.7]);
             ctx.lineDashOffset = TILE_SIZE * 0.15;
-            ctx.stroke();
+            drawBrokenPath();
 
             // Minor scale dot
             ctx.strokeStyle = '#388E3C'; 
             ctx.lineWidth = TILE_SIZE * 0.2; 
             ctx.setLineDash([TILE_SIZE * 0.1, TILE_SIZE * 0.9]);
             ctx.lineDashOffset = TILE_SIZE * 0.05;
-            ctx.stroke();
+            drawBrokenPath();
             ctx.restore();
 
             // 3. Draw Base Head
@@ -1058,8 +1185,13 @@
             ctx.fillStyle = '#4CAF50'; 
             ctx.fill();
 
-            // 4. Draw Eyes matching orientation
-            let angle = Math.atan2(hdy, hdx);
+            // 4. Draw Eyes matching orientation logically wrapping to opposite edges
+            let eyeHdx = curr[0].x - curr[1].x;
+            let eyeHdy = curr[0].y - curr[1].y;
+            if (eyeHdx > 1) eyeHdx = -1; else if (eyeHdx < -1) eyeHdx = 1;
+            if (eyeHdy > 1) eyeHdy = -1; else if (eyeHdy < -1) eyeHdy = 1;
+
+            let angle = Math.atan2(eyeHdy, eyeHdx);
             ctx.save();
             // Move origin to the head's center
             ctx.translate((hx + 0.5) * TILE_SIZE, (hy + 0.5) * TILE_SIZE);
@@ -1237,13 +1369,25 @@
         // Gamemode Selection Logic
         gamemodeRows.forEach(row => {
             row.addEventListener('click', () => {
-                // Remove active class from all
-                gamemodeRows.forEach(r => r.classList.remove('active'));
-                // Add active to clicked row
-                row.classList.add('active');
-                // Set the current mode
-                currentGamemode = row.getAttribute('data-mode');
-                // Persist new gamemode settings
+                const mode = row.getAttribute('data-mode');
+                
+                if (mode === 'Normal') {
+                    activeGamemodes = ['Normal'];
+                } else {
+                    activeGamemodes = activeGamemodes.filter(m => m !== 'Normal');
+                    
+                    if (activeGamemodes.includes(mode)) {
+                        activeGamemodes = activeGamemodes.filter(m => m !== mode);
+                    } else {
+                        activeGamemodes.push(mode);
+                    }
+                    
+                    if (activeGamemodes.length === 0) {
+                        activeGamemodes = ['Normal'];
+                    }
+                }
+                
+                updateGamemodeUI();
                 saveSettings();
             });
         });
@@ -1450,7 +1594,11 @@
                         rect.left + cursorPos.x,
                         rect.top  + cursorPos.y
                     );
-                    if (el) el.click();
+                    if (el) {
+                        const clickable = el.closest ? el.closest('.action-btn, .gamemode-btn') : el;
+                        if (clickable) clickable.click();
+                        else el.click();
+                    }
                 }
 
                 // B button (1) → back
