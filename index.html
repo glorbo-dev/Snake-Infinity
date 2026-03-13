@@ -6,6 +6,10 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Snake Infinity</title>
+    
+    <!-- Gun.js for Decentralized Serverless Cloud Sync (1-File constraint) -->
+    <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
+
     <style>
         body {
             display: flex;
@@ -31,8 +35,6 @@
             padding: clamp(15px, 4vw, 30px);
             border-radius: 10px;
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
-            
-            /* Responsive box sizing */
             width: 95vw;
             height: 95vh;
             height: 95dvh;
@@ -60,8 +62,8 @@
         }
 
         #canvas-wrapper {
-            flex-grow: 1; /* Takes up all remaining vertical space safely */
-            min-height: 0; /* Important so child can shrink below flex bounds */
+            flex-grow: 1; 
+            min-height: 0; 
             width: 100%;
             display: flex; 
             justify-content: center;
@@ -76,8 +78,6 @@
             box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
             box-sizing: border-box;
             display: block;
-            
-            /* Shrink-wraps inside flex parent while keeping perfect proportions */
             max-width: 100%;
             max-height: 100%;
             aspect-ratio: var(--ratio, 17 / 15);
@@ -102,8 +102,14 @@
             box-sizing: border-box;
         }
 
-        .action-btn:active {
+        .action-btn:active:not(:disabled) {
             transform: scale(0.95);
+        }
+
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
         }
 
         .green-btn {
@@ -118,7 +124,7 @@
             flex-direction: column;
             align-items: center;
             z-index: 20;
-            overflow-y: auto; /* Enable scrolling for small mobile landscape */
+            overflow-y: auto; 
         }
 
         #start-screen {
@@ -167,7 +173,6 @@
             letter-spacing: 1px;
         }
 
-        /* Reusable styles for settings, account, and gamemodes */
         #settings-screen, #gamemodes-screen, #account-screen {
             background-color: #ffffff;
         }
@@ -197,7 +202,6 @@
             width: 100%;
         }
 
-        /* Form Inputs for Account Screen */
         .text-input {
             width: 100%;
             max-width: clamp(250px, 80vmin, 320px);
@@ -273,7 +277,7 @@
             transition: transform 0.1s ease;
         }
         
-        .gamemode-btn:active {
+        .gamemode-btn:active:not(.active) {
             transform: scale(0.98);
         }
 
@@ -460,7 +464,7 @@
             <button id="gamemodes-btn" class="action-btn green-btn">GAMEMODES</button>
             <button id="settings-btn" class="action-btn green-btn">SETTINGS</button>
             <button id="account-btn" class="action-btn green-btn">ACCOUNT</button>
-            <div id="version-text">Version 1.3</div>
+            <div id="version-text">Version 1.4</div>
         </div>
 
         <!-- 2. Settings Menu -->
@@ -647,13 +651,12 @@
         let directionQueue =[]; 
         let score = 0;
         let activeGamemodes = ['Normal'];
-        let currentUser = null; // Used for identifying high scores and UI logic
+        let currentUser = null; 
         
         let animationFrameId;
         let lastTickTime = 0;
         let isPaused = false;
 
-        // Confetti variables
         let confetti =[];
         let confettiAnimationFrame;
 
@@ -680,7 +683,6 @@
             }
         };
 
-        // UI Button Sound System
         function playBtnSound(isBack = false) {
             let s = isBack ? btnBackSound.cloneNode(true) : btnClickSound.cloneNode(true);
             s.play().catch(e => console.log("Audio play prevented:", e));
@@ -697,7 +699,6 @@
             });
         });
 
-        // Controller Rumble Helper
         function vibrateGamepad(duration, strongMag, weakMag) {
             try {
                 const gamepads = navigator.getGamepads ? navigator.getGamepads() :[];
@@ -716,13 +717,20 @@
         }
 
         // ================================================================
-        // SECURE ACCOUNT SYSTEM (Web Crypto API)
-        // Note: For true absolute security, passwords must be verified 
-        // on a backend server. However, to fulfill the "unhackable" 
-        // constraint locally, we use SHA-256 + cryptographic salts 
-        // to ensure plain text passwords are mathematically irreversible 
-        // and cannot be read even if someone hacks LocalStorage.
+        // CLOUD DB: Gun.js Initialization
+        // We use reliable public peers to sync data across devices safely.
         // ================================================================
+        
+        const gun = Gun({
+            peers:[
+                'https://gun-manhattan.herokuapp.com/gun',
+                'https://rs.iris.to/gun'
+            ],
+            localStorage: true
+        });
+        
+        // This is the global database node for our game
+        const appData = gun.get('snake_infinity_global_users_v5');
 
         async function hashPassword(password, salt) {
             const encoder = new TextEncoder();
@@ -751,80 +759,134 @@
             }
         }
 
+        function setAuthLoading(isLoading) {
+            loginBtn.disabled = isLoading;
+            registerBtn.disabled = isLoading;
+            loginBtn.innerText = isLoading ? "LOADING..." : "LOGIN";
+            registerBtn.innerText = isLoading ? "WAIT..." : "REGISTER";
+        }
+
+        // Helper function to safely fetch user from global graph
+        function fetchUserFromCloud(usernameLower, callback) {
+            let responded = false;
+            appData.get(usernameLower).once((data) => {
+                if (responded) return;
+                if (data && data.hash) {
+                    responded = true;
+                    callback(data);
+                }
+            });
+
+            // If the network or cache yields nothing within 3 seconds, assume no user exists
+            setTimeout(() => {
+                if (!responded) {
+                    responded = true;
+                    callback(null);
+                }
+            }, 3000);
+        }
+
+        // Push your local high scores to your global Gun profile node
+        function syncScoresToCloud() {
+            if (!currentUser) return;
+            let userScores = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                let k = localStorage.key(i);
+                if (k.startsWith(`snakeHighScore_${currentUser}_`)) {
+                    userScores[k] = localStorage.getItem(k);
+                }
+            }
+            const uLower = currentUser.toLowerCase();
+            appData.get(uLower).get('scores').put(JSON.stringify(userScores));
+        }
+
         loginBtn.addEventListener('click', async () => {
             const u = usernameInput.value.trim();
             const p = passwordInput.value;
             
-            if (!u || !p) {
-                accountError.innerText = "Username and password required.";
-                return;
-            }
+            if (!u || !p) { accountError.innerText = "Username and password required."; return; }
 
-            let accounts = JSON.parse(localStorage.getItem('snake_accounts') || '{}');
-            
-            if (!accounts[u]) {
-                accountError.innerText = "Invalid username or password."; 
-                return;
-            }
+            accountError.innerText = "";
+            setAuthLoading(true);
+            const uLower = u.toLowerCase(); // Forces case-insensitive checks
 
-            const { salt, hash } = accounts[u];
-            const testHash = await hashPassword(p, salt);
+            fetchUserFromCloud(uLower, async (data) => {
+                if (!data || !data.hash) {
+                    setAuthLoading(false);
+                    accountError.innerText = "User not found or network error.";
+                    return;
+                }
 
-            if (testHash === hash) {
-                currentUser = u;
-                localStorage.setItem('snake_currentUser', u);
-                updateAccountUI();
-                updateScoreDisplay(); // Sync user's personal high scores
-                accountError.innerText = "";
-                passwordInput.value = "";
-                usernameInput.value = "";
-            } else {
-                accountError.innerText = "Invalid username or password.";
-            }
+                const testHash = await hashPassword(p, data.salt);
+                if (testHash === data.hash) {
+                    currentUser = data.originalName;
+                    localStorage.setItem('snake_currentUser', currentUser);
+                    
+                    // Pull their global scores to this device
+                    appData.get(uLower).get('scores').once((scoreData) => {
+                        if (scoreData) {
+                            try {
+                                const parsed = JSON.parse(scoreData);
+                                Object.keys(parsed).forEach(k => localStorage.setItem(k, parsed[k]));
+                            } catch(e){}
+                        }
+                        setAuthLoading(false);
+                        updateAccountUI();
+                        updateScoreDisplay();
+                        usernameInput.value = "";
+                        passwordInput.value = "";
+                    });
+                } else {
+                    setAuthLoading(false);
+                    accountError.innerText = "Invalid password.";
+                }
+            });
         });
 
         registerBtn.addEventListener('click', async () => {
             const u = usernameInput.value.trim();
             const p = passwordInput.value;
             
-            if (!u || !p) {
-                accountError.innerText = "Username and password required.";
-                return;
-            }
-            if (u.toLowerCase() === 'guest') {
-                accountError.innerText = "Reserved username.";
-                return;
-            }
+            if (!u || !p) { accountError.innerText = "Username and password required."; return; }
+            if (u.toLowerCase() === 'guest') { accountError.innerText = "Reserved username."; return; }
 
-            let accounts = JSON.parse(localStorage.getItem('snake_accounts') || '{}');
-            
-            if (accounts[u]) {
-                accountError.innerText = "Username already exists.";
-                return;
-            }
-
-            const salt = generateSalt();
-            const hash = await hashPassword(p, salt);
-            
-            accounts[u] = { salt, hash };
-            localStorage.setItem('snake_accounts', JSON.stringify(accounts));
-            
-            currentUser = u;
-            localStorage.setItem('snake_currentUser', u);
-            updateAccountUI();
-            updateScoreDisplay();
             accountError.innerText = "";
-            passwordInput.value = "";
-            usernameInput.value = "";
+            setAuthLoading(true);
+            const uLower = u.toLowerCase(); // Prevents "Player" and "player" duplicating
+
+            fetchUserFromCloud(uLower, async (data) => {
+                if (data && data.hash) {
+                    setAuthLoading(false);
+                    accountError.innerText = "Username already exists globally!";
+                    return;
+                }
+
+                // Make the account
+                const salt = generateSalt();
+                const hash = await hashPassword(p, salt);
+                
+                appData.get(uLower).put({
+                    originalName: u,
+                    hash: hash,
+                    salt: salt
+                });
+                
+                currentUser = u;
+                localStorage.setItem('snake_currentUser', currentUser);
+                setAuthLoading(false);
+                updateAccountUI();
+                updateScoreDisplay();
+                usernameInput.value = "";
+                passwordInput.value = "";
+            });
         });
 
         logoutBtn.addEventListener('click', () => {
             currentUser = null;
             localStorage.removeItem('snake_currentUser');
             updateAccountUI();
-            updateScoreDisplay();
+            updateScoreDisplay(); // Refreshes to Guest score
         });
-
 
         // --- LocalStorage Persistence Functions ---
         function saveSettings() {
@@ -855,6 +917,17 @@
                 const savedUser = localStorage.getItem('snake_currentUser');
                 if (savedUser) {
                     currentUser = savedUser;
+                    // Background fetch to ensure scores sync when revisiting the page
+                    const uLower = currentUser.toLowerCase();
+                    appData.get(uLower).get('scores').once((scoreData) => {
+                        if (scoreData) {
+                            try {
+                                const parsed = JSON.parse(scoreData);
+                                Object.keys(parsed).forEach(k => localStorage.setItem(k, parsed[k]));
+                                updateScoreDisplay();
+                            } catch(e){}
+                        }
+                    });
                 }
 
                 updateGamemodeUI();
@@ -872,7 +945,6 @@
             });
         }
 
-        // Attach listeners for persistence
         speedSelect.addEventListener('change', saveSettings);
         mapSelect.addEventListener('change', saveSettings);
         applesSelect.addEventListener('change', saveSettings);
@@ -882,10 +954,8 @@
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
             if (confettiAnimationFrame) cancelAnimationFrame(confettiAnimationFrame);
             
-            // Toggle scoreboard visibility
             scoreboard.style.visibility = isStartingPlay ? 'visible' : 'hidden';
 
-            // 1. Apply Chosen Settings
             const speedMap = { 'Slow': 200, 'Normal': 100, 'Fast': 50 };
             const mapMap = {
                 'Small': { c: 9, r: 10 },
@@ -900,10 +970,8 @@
             canvas.width = COLS * TILE_SIZE;
             canvas.height = ROWS * TILE_SIZE;
 
-            // Dynamically set canvas CSS custom property so it shrink-wraps perfectly
             canvas.style.setProperty('--ratio', `${COLS} / ${ROWS}`);
 
-            // 2. Initialize Logic Defaults
             let startX = Math.floor(COLS / 2);
             let startY = Math.floor(ROWS / 2);
             if (startX < 3) startX = 3; 
@@ -922,10 +990,8 @@
             
             updateScoreDisplay();
             
-            // 3. Initialize Apples safely depending on Gamemode
             apples =[];
             if (activeGamemodes.includes('AllApples')) {
-                // Fill all empty tiles with apples
                 for (let x = 0; x < COLS; x++) {
                     for (let y = 0; y < ROWS; y++) {
                         let onSnake = snake.some(part => part.x === x && part.y === y);
@@ -935,7 +1001,6 @@
                     }
                 }
             } else {
-                // Normal mode
                 const numApples = parseInt(applesSelect.value) || 1;
                 for (let i = 0; i < numApples; i++) {
                     let newA = createApple(i === 0);
@@ -949,9 +1014,8 @@
         function updateScoreDisplay() {
             scoreElement.innerText = score;
             const applesVal = applesSelect.value;
-            // Securely tie the high score to the logged-in user or Guest
+            // High scores depend on the user logged in, map size, speed, and apples
             const userPrefix = currentUser ? currentUser : 'Guest';
-            // Includes settings AND gamemodes in the key
             const key = `snakeHighScore_${userPrefix}_${speedSelect.value}_${mapSelect.value}_${applesVal}_${activeGamemodes.slice().sort().join('-')}`;
             let highScore = localStorage.getItem(key) || 0;
             highScoreElement.innerText = highScore;
@@ -984,7 +1048,6 @@
         }
 
         function initPlay() {
-            // Audio unlock workaround
             const unlockAudio = (audioObj) => {
                 audioObj.play().then(() => {
                     audioObj.pause();
@@ -1129,6 +1192,8 @@
                 
                 if (score > currentHigh) {
                     localStorage.setItem(key, score);
+                    // Cloud Save Trigger
+                    syncScoresToCloud();
                 }
                 updateScoreDisplay();
                 
@@ -1216,7 +1281,6 @@
             }
         }
 
-        // --- Render Operations ---
         function clearCanvas() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
@@ -1255,7 +1319,6 @@
             let last = curr.length - 1;
             let prevLast = prev.length - 1;
             
-            // Interpolate tail
             let tdx = curr[last].x - prev[prevLast].x;
             let tdy = curr[last].y - prev[prevLast].y;
             
@@ -1295,7 +1358,6 @@
                 vertices.push({ x: curr[1].x, y: curr[1].y });
             }
 
-            // Interpolate Head
             let hdx = curr[0].x - curr[1].x;
             let hdy = curr[0].y - curr[1].y;
             let hWrap = Math.abs(hdx) > 1 || Math.abs(hdy) > 1;
@@ -1436,11 +1498,8 @@
             });
         }
 
-        // --- Event Listeners ---
-
         document.addEventListener('keydown', function(event) {
             if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
-                // Only prevent default scrolling if not interacting with inputs
                 if (document.activeElement.tagName !== 'INPUT') {
                     event.preventDefault(); 
                 }
@@ -1511,12 +1570,10 @@
             }
         });
 
-        // Interface Button Interactivity
         startBtn.addEventListener('click', initPlay);
         restartBtn.addEventListener('click', initPlay);
         winRestartBtn.addEventListener('click', initPlay);
 
-        // Menus Navigation
         settingsBtn.addEventListener('click', () => {
             startScreen.style.display = 'none';
             settingsScreen.style.display = 'flex';
@@ -1552,7 +1609,6 @@
             prepareBoard(false);
         });
 
-        // Gamemode Selection Logic
         gamemodeRows.forEach(row => {
             row.addEventListener('click', () => {
                 const mode = row.getAttribute('data-mode');
@@ -1593,7 +1649,6 @@
         resumeBtn.addEventListener('click', resumeGame);
         pauseMainMenuBtn.addEventListener('click', resetToMainMenu);
 
-        // Inject initial data and boot
         loadSettings();
         prepareBoard(false);
 
@@ -1674,7 +1729,6 @@
         }, { passive: false });
 
         canvasWrapper.addEventListener('contextmenu', e => e.preventDefault());
-
 
         // ================================================================
         // GAMEPAD / CONTROLLER SUPPORT
