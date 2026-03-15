@@ -7,7 +7,6 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Snake Infinity</title>
     
-    <!-- Gun.js for Decentralized Serverless Cloud Sync (1-File constraint) -->
     <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
 
     <style>
@@ -446,7 +445,6 @@
 <body>
 
     <div id="game-container">
-        <!-- Scoreboard -->
         <div id="scoreboard">
             <div class="score-box">Apples: <span id="score">0</span></div>
             <div class="score-box">Best: <span id="high-score">0</span></div>
@@ -570,13 +568,8 @@
             <button id="pause-main-menu-btn" class="action-btn">Return to main menu</button>
         </div>
 
-        <!-- Confetti Canvas overlay layer -->
         <canvas id="confettiCanvas"></canvas>
-
-        <!-- Controller cursor (shown only on menu screens) -->
         <div id="controller-cursor"></div>
-
-        <!-- Controller badge -->
         <div id="controller-badge">🎮 Controller</div>
     </div>
 
@@ -587,7 +580,6 @@
         const highScoreElement = document.getElementById('high-score');
         const scoreboard = document.getElementById('scoreboard');
         
-        // Menu Elements
         const startScreen = document.getElementById('start-screen');
         const settingsScreen = document.getElementById('settings-screen');
         const gamemodesScreen = document.getElementById('gamemodes-screen');
@@ -596,7 +588,6 @@
         const winScreen = document.getElementById('game-win-screen');
         const pauseScreen = document.getElementById('pause-screen');
         
-        // Buttons
         const startBtn = document.getElementById('start-btn');
         const settingsBtn = document.getElementById('settings-btn');
         const gamemodesBtn = document.getElementById('gamemodes-btn');
@@ -613,7 +604,6 @@
         const resumeBtn = document.getElementById('resume-btn');
         const pauseMainMenuBtn = document.getElementById('pause-main-menu-btn');
         
-        // Account Elements
         const usernameInput = document.getElementById('username-input');
         const passwordInput = document.getElementById('password-input');
         const loginBtn = document.getElementById('login-btn');
@@ -625,30 +615,23 @@
         const loggedInContainer = document.getElementById('logged-in-container');
         const welcomeText = document.getElementById('welcome-text');
 
-        // Gamemode selection rows
         const gamemodeRows = document.querySelectorAll('.gamemode-btn');
-
-        // Configuration Nodes
         const speedSelect = document.getElementById('speed-select');
         const mapSelect = document.getElementById('map-select');
         const applesSelect = document.getElementById('apples-select');
-
-        // Controller Element nodes 
         const badgeEl = document.getElementById('controller-badge');
 
-        // Game Configuration Variables
         let COLS = 17;
         let ROWS = 15;
         const TILE_SIZE = 30; 
         let TICK_RATE = 100;
 
-        // Game State Variables
         let snake = [];
-        let previousSnake =[]; 
-        let apples =[]; 
+        let previousSnake = []; 
+        let apples = []; 
         let dx = 0; 
         let dy = 0;
-        let directionQueue =[]; 
+        let directionQueue = []; 
         let score = 0;
         let activeGamemodes = ['Normal'];
         let currentUser = null; 
@@ -657,10 +640,9 @@
         let lastTickTime = 0;
         let isPaused = false;
 
-        let confetti =[];
+        let confetti = [];
         let confettiAnimationFrame;
 
-        // Custom Sounds & Texture 
         const deathSound = new Audio('https://files.catbox.moe/posk3c.mp3');
         deathSound.preload = 'auto'; 
         const eatSound = new Audio('https://files.catbox.moe/a01mh9.mp3');
@@ -701,15 +683,13 @@
 
         function vibrateGamepad(duration, strongMag, weakMag) {
             try {
-                const gamepads = navigator.getGamepads ? navigator.getGamepads() :[];
+                const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
                 for (let i = 0; i < gamepads.length; i++) {
                     const gp = gamepads[i];
                     if (gp && gp.vibrationActuator && gp.vibrationActuator.type === "dual-rumble") {
                         gp.vibrationActuator.playEffect("dual-rumble", {
-                            startDelay: 0,
-                            duration: duration,
-                            weakMagnitude: weakMag,
-                            strongMagnitude: strongMag
+                            startDelay: 0, duration: duration,
+                            weakMagnitude: weakMag, strongMagnitude: strongMag
                         }).catch(e => {}); 
                     }
                 }
@@ -717,19 +697,17 @@
         }
 
         // ================================================================
-        // CLOUD DB: Gun.js Initialization
-        // We use reliable public peers to sync data across devices safely.
+        // CLOUD DB: Gun.js
         // ================================================================
         
         const gun = Gun({
-            peers:[
+            peers: [
                 'https://gun-manhattan.herokuapp.com/gun',
                 'https://rs.iris.to/gun'
             ],
             localStorage: true
         });
         
-        // This is the global database node for our game
         const appData = gun.get('snake_infinity_global_users_v5');
 
         async function hashPassword(password, salt) {
@@ -744,6 +722,71 @@
             const array = new Uint8Array(16);
             crypto.getRandomValues(array);
             return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // ================================================================
+        // FIX 1: Local credential cache
+        // Stores hashed credentials in localStorage so login works
+        // instantly even if Gun peers are slow or unreachable.
+        // ================================================================
+        function cacheUserLocally(usernameLower, data) {
+            try {
+                localStorage.setItem(
+                    `snake_ucache_${usernameLower}`,
+                    JSON.stringify({
+                        originalName: data.originalName,
+                        hash: data.hash,
+                        salt: data.salt
+                    })
+                );
+            } catch(e) {}
+        }
+
+        function getCachedUser(usernameLower) {
+            try {
+                const raw = localStorage.getItem(`snake_ucache_${usernameLower}`);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                return (parsed && parsed.hash) ? parsed : null;
+            } catch(e) { return null; }
+        }
+
+        // ================================================================
+        // FIX 2: Replaced .once() with .on()
+        //
+        // The old code used Gun's .once(), which fires exactly one time —
+        // and that one time often returned null/undefined before the peer
+        // had synced. The if(data && data.hash) guard skipped that null,
+        // but .once() never fired again, so the 3-second timeout always
+        // kicked in and returned null — breaking both login and the
+        // duplicate-name check on registration.
+        //
+        // .on() keeps listening until we get real data, and we combine it
+        // with the local credential cache as a reliable fallback.
+        // ================================================================
+        function fetchUserFromCloud(usernameLower, callback) {
+            let responded = false;
+            const localCached = getCachedUser(usernameLower);
+
+            // Keep listening until Gun delivers real data
+            appData.get(usernameLower).on(function(data) {
+                if (responded) return;
+                if (data && data.hash) {
+                    responded = true;
+                    // Refresh local cache with latest cloud data
+                    cacheUserLocally(usernameLower, data);
+                    callback(data);
+                }
+            });
+
+            // Timeout: fall back to local cache, or null if no cache
+            setTimeout(() => {
+                if (!responded) {
+                    responded = true;
+                    // Use locally cached credentials if cloud was too slow
+                    callback(localCached || null);
+                }
+            }, 5000);
         }
 
         function updateAccountUI() {
@@ -766,27 +809,6 @@
             registerBtn.innerText = isLoading ? "WAIT..." : "REGISTER";
         }
 
-        // Helper function to safely fetch user from global graph
-        function fetchUserFromCloud(usernameLower, callback) {
-            let responded = false;
-            appData.get(usernameLower).once((data) => {
-                if (responded) return;
-                if (data && data.hash) {
-                    responded = true;
-                    callback(data);
-                }
-            });
-
-            // If the network or cache yields nothing within 3 seconds, assume no user exists
-            setTimeout(() => {
-                if (!responded) {
-                    responded = true;
-                    callback(null);
-                }
-            }, 3000);
-        }
-
-        // Push your local high scores to your global Gun profile node
         function syncScoresToCloud() {
             if (!currentUser) return;
             let userScores = {};
@@ -808,12 +830,12 @@
 
             accountError.innerText = "";
             setAuthLoading(true);
-            const uLower = u.toLowerCase(); // Forces case-insensitive checks
+            const uLower = u.toLowerCase();
 
             fetchUserFromCloud(uLower, async (data) => {
                 if (!data || !data.hash) {
                     setAuthLoading(false);
-                    accountError.innerText = "User not found or network error.";
+                    accountError.innerText = "User not found. Check your username or register.";
                     return;
                 }
 
@@ -822,13 +844,13 @@
                     currentUser = data.originalName;
                     localStorage.setItem('snake_currentUser', currentUser);
                     
-                    // Pull their global scores to this device
+                    // Pull global scores to this device
                     appData.get(uLower).get('scores').once((scoreData) => {
                         if (scoreData) {
                             try {
                                 const parsed = JSON.parse(scoreData);
                                 Object.keys(parsed).forEach(k => localStorage.setItem(k, parsed[k]));
-                            } catch(e){}
+                            } catch(e) {}
                         }
                         setAuthLoading(false);
                         updateAccountUI();
@@ -836,6 +858,18 @@
                         usernameInput.value = "";
                         passwordInput.value = "";
                     });
+
+                    // Don't wait forever for scores
+                    setTimeout(() => {
+                        if (loginBtn.disabled) {
+                            setAuthLoading(false);
+                            updateAccountUI();
+                            updateScoreDisplay();
+                            usernameInput.value = "";
+                            passwordInput.value = "";
+                        }
+                    }, 3000);
+
                 } else {
                     setAuthLoading(false);
                     accountError.innerText = "Invalid password.";
@@ -851,25 +885,38 @@
             if (u.toLowerCase() === 'guest') { accountError.innerText = "Reserved username."; return; }
 
             accountError.innerText = "";
+            const uLower = u.toLowerCase();
+
+            // ================================================================
+            // FIX 3: Check the local cache FIRST before going to Gun.
+            // This catches duplicates instantly if the user was registered on
+            // this device, and prevents race conditions where Gun was slow on
+            // the earlier registration check but the name is already taken.
+            // ================================================================
+            const localCached = getCachedUser(uLower);
+            if (localCached && localCached.hash) {
+                accountError.innerText = "Username already exists!";
+                return;
+            }
+
             setAuthLoading(true);
-            const uLower = u.toLowerCase(); // Prevents "Player" and "player" duplicating
 
             fetchUserFromCloud(uLower, async (data) => {
                 if (data && data.hash) {
                     setAuthLoading(false);
-                    accountError.innerText = "Username already exists globally!";
+                    accountError.innerText = "Username already taken!";
                     return;
                 }
 
-                // Make the account
                 const salt = generateSalt();
                 const hash = await hashPassword(p, salt);
+                const userData = { originalName: u, hash: hash, salt: salt };
                 
-                appData.get(uLower).put({
-                    originalName: u,
-                    hash: hash,
-                    salt: salt
-                });
+                // Write to Gun cloud
+                appData.get(uLower).put(userData);
+
+                // FIX: Also cache locally so login works immediately after
+                cacheUserLocally(uLower, userData);
                 
                 currentUser = u;
                 localStorage.setItem('snake_currentUser', currentUser);
@@ -885,10 +932,9 @@
             currentUser = null;
             localStorage.removeItem('snake_currentUser');
             updateAccountUI();
-            updateScoreDisplay(); // Refreshes to Guest score
+            updateScoreDisplay();
         });
 
-        // --- LocalStorage Persistence Functions ---
         function saveSettings() {
             try {
                 localStorage.setItem('snake_speed', speedSelect.value);
@@ -910,14 +956,11 @@
                 if (savedApples) applesSelect.value = savedApples;
                 
                 const savedGamemodesStr = localStorage.getItem('snake_gamemodes');
-                if (savedGamemodesStr) {
-                    activeGamemodes = JSON.parse(savedGamemodesStr);
-                }
+                if (savedGamemodesStr) activeGamemodes = JSON.parse(savedGamemodesStr);
                 
                 const savedUser = localStorage.getItem('snake_currentUser');
                 if (savedUser) {
                     currentUser = savedUser;
-                    // Background fetch to ensure scores sync when revisiting the page
                     const uLower = currentUser.toLowerCase();
                     appData.get(uLower).get('scores').once((scoreData) => {
                         if (scoreData) {
@@ -925,7 +968,7 @@
                                 const parsed = JSON.parse(scoreData);
                                 Object.keys(parsed).forEach(k => localStorage.setItem(k, parsed[k]));
                                 updateScoreDisplay();
-                            } catch(e){}
+                            } catch(e) {}
                         }
                     });
                 }
@@ -949,7 +992,6 @@
         mapSelect.addEventListener('change', saveSettings);
         applesSelect.addEventListener('change', saveSettings);
 
-        // --- Core Application Functions ---
         function prepareBoard(isStartingPlay = false) {
             if (animationFrameId) cancelAnimationFrame(animationFrameId);
             if (confettiAnimationFrame) cancelAnimationFrame(confettiAnimationFrame);
@@ -969,35 +1011,29 @@
             
             canvas.width = COLS * TILE_SIZE;
             canvas.height = ROWS * TILE_SIZE;
-
             canvas.style.setProperty('--ratio', `${COLS} / ${ROWS}`);
 
             let startX = Math.floor(COLS / 2);
             let startY = Math.floor(ROWS / 2);
             if (startX < 3) startX = 3; 
 
-            snake =[
+            snake = [
                 { x: startX, y: startY },
                 { x: startX - 1, y: startY },
                 { x: startX - 2, y: startY }
             ];
             previousSnake = JSON.parse(JSON.stringify(snake));
             
-            dx = 0; 
-            dy = 0; 
-            directionQueue =[];
+            dx = 0; dy = 0; directionQueue = [];
             score = 0;
-            
             updateScoreDisplay();
             
-            apples =[];
+            apples = [];
             if (activeGamemodes.includes('AllApples')) {
                 for (let x = 0; x < COLS; x++) {
                     for (let y = 0; y < ROWS; y++) {
                         let onSnake = snake.some(part => part.x === x && part.y === y);
-                        if (!onSnake) {
-                            apples.push({ x: x, y: y });
-                        }
+                        if (!onSnake) apples.push({ x: x, y: y });
                     }
                 }
             } else {
@@ -1014,7 +1050,6 @@
         function updateScoreDisplay() {
             scoreElement.innerText = score;
             const applesVal = applesSelect.value;
-            // High scores depend on the user logged in, map size, speed, and apples
             const userPrefix = currentUser ? currentUser : 'Guest';
             const key = `snakeHighScore_${userPrefix}_${speedSelect.value}_${mapSelect.value}_${applesVal}_${activeGamemodes.slice().sort().join('-')}`;
             let highScore = localStorage.getItem(key) || 0;
@@ -1028,13 +1063,9 @@
             const hasGamepad = badgeEl && badgeEl.classList.contains('visible');
             const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
-            if (hasGamepad) {
-                pauseText.innerText = "Press START, X, or ESC to resume";
-            } else if (isTouch) {
-                pauseText.innerText = "Tap screen to resume";
-            } else {
-                pauseText.innerText = "Press ESC to resume";
-            }
+            if (hasGamepad) pauseText.innerText = "Press START, X, or ESC to resume";
+            else if (isTouch) pauseText.innerText = "Tap screen to resume";
+            else pauseText.innerText = "Press ESC to resume";
 
             pauseScreen.style.display = 'flex';
             renderStaticFrame();
@@ -1055,12 +1086,7 @@
                 }).catch(e => console.log("Audio unlock issue:", e));
             };
             
-            unlockAudio(deathSound);
-            unlockAudio(eatSound);
-            unlockAudio(winSound);
-            unlockAudio(moveSound);
-            unlockAudio(btnClickSound);
-            unlockAudio(btnBackSound);
+            [deathSound, eatSound, winSound, moveSound, btnClickSound, btnBackSound].forEach(unlockAudio);
 
             startScreen.style.display = 'none';
             settingsScreen.style.display = 'none';
@@ -1073,7 +1099,6 @@
             isPaused = false;
             
             prepareBoard(true); 
-            
             lastTickTime = performance.now();
             animationFrameId = requestAnimationFrame(gameLoop);
         }
@@ -1094,10 +1119,9 @@
             if (deltaTime >= TICK_RATE) {
                 let ticks = Math.floor(deltaTime / TICK_RATE);
                 if (ticks > 5) ticks = 5; 
-
                 lastTickTime += ticks * TICK_RATE;
                 
-                for(let i = 0; i < ticks; i++) {
+                for (let i = 0; i < ticks; i++) {
                     updateLogic();
                     if (gameOverScreen.style.display === 'flex' || winScreen.style.display === 'flex') {
                         renderStaticFrame();
@@ -1108,7 +1132,6 @@
             }
 
             let progress = Math.min(deltaTime / TICK_RATE, 1);
-
             clearCanvas();
             drawGrid();
             drawApples();
@@ -1126,13 +1149,11 @@
             }
 
             const head = { x: snake[0].x + nextDx, y: snake[0].y + nextDy };
-
             const isInvincible = activeGamemodes.includes('Invincible');
 
             if (isInvincible) {
                 if (head.x < 0) head.x = COLS - 1;
                 else if (head.x >= COLS) head.x = 0;
-                
                 if (head.y < 0) head.y = ROWS - 1;
                 else if (head.y >= ROWS) head.y = 0;
             }
@@ -1160,7 +1181,6 @@
                 vibrateGamepad(400, 1.0, 1.0); 
                 deathSound.currentTime = 0; 
                 deathSound.play().catch(e => console.log("Audio play prevented:", e));
-                
                 gameOverScreen.style.display = 'flex';
                 return; 
             }
@@ -1192,7 +1212,6 @@
                 
                 if (score > currentHigh) {
                     localStorage.setItem(key, score);
-                    // Cloud Save Trigger
                     syncScoresToCloud();
                 }
                 updateScoreDisplay();
@@ -1207,16 +1226,13 @@
 
                 if (!activeGamemodes.includes('AllApples')) {
                     let newApple = createApple(false);
-                    if (newApple) {
-                        apples.push(newApple);
-                    }
+                    if (newApple) apples.push(newApple);
                 }
             } else {
                 snake.pop();
             }
         }
 
-        // --- Confetti Generation System ---
         function triggerWin() {
             vibrateGamepad(1000, 0.8, 0.8); 
             winSound.currentTime = 0;
@@ -1234,17 +1250,15 @@
             const confettiCanvas = document.getElementById('confettiCanvas');
             confettiCanvas.width = confettiCanvas.offsetWidth;
             confettiCanvas.height = confettiCanvas.offsetHeight;
-            confetti =[];
-            const colors =['#a864fd', '#29cdff', '#78ff44', '#ff718d', '#fdff6a'];
+            confetti = [];
+            const colors = ['#a864fd', '#29cdff', '#78ff44', '#ff718d', '#fdff6a'];
             
             for (let i = 0; i < 150; i++) {
                 confetti.push({
                     x: Math.random() * confettiCanvas.width,
                     y: Math.random() * confettiCanvas.height - confettiCanvas.height, 
-                    w: Math.random() * 8 + 4,
-                    h: Math.random() * 10 + 5,
-                    dx: Math.random() * 3 - 1.5,
-                    dy: Math.random() * 3 + 2,
+                    w: Math.random() * 8 + 4, h: Math.random() * 10 + 5,
+                    dx: Math.random() * 3 - 1.5, dy: Math.random() * 3 + 2,
                     color: colors[Math.floor(Math.random() * colors.length)],
                     tilt: Math.random() * 10,
                     tiltAngleInc: (Math.random() * 0.07) + 0.05,
@@ -1262,12 +1276,10 @@
                 c.tiltAngle += c.tiltAngleInc;
                 c.y += c.dy;
                 c.x += Math.sin(c.tiltAngle) * 1.5 + c.dx;
-                
                 if (c.y > confettiCanvas.height) {
                     c.y = -20;
                     c.x = Math.random() * confettiCanvas.width;
                 }
-
                 ctxC.beginPath();
                 ctxC.lineWidth = c.w;
                 ctxC.strokeStyle = c.color;
@@ -1281,26 +1293,16 @@
             }
         }
 
-        function clearCanvas() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
+        function clearCanvas() { ctx.clearRect(0, 0, canvas.width, canvas.height); }
 
         function drawGrid() {
             ctx.strokeStyle = '#333333';
             ctx.lineWidth = 1;
-
             for (let x = 0; x <= COLS; x++) {
-                ctx.beginPath();
-                ctx.moveTo(x * TILE_SIZE, 0);
-                ctx.lineTo(x * TILE_SIZE, canvas.height);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(x * TILE_SIZE, 0); ctx.lineTo(x * TILE_SIZE, canvas.height); ctx.stroke();
             }
-
             for (let y = 0; y <= ROWS; y++) {
-                ctx.beginPath();
-                ctx.moveTo(0, y * TILE_SIZE);
-                ctx.lineTo(canvas.width, y * TILE_SIZE);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, y * TILE_SIZE); ctx.lineTo(canvas.width, y * TILE_SIZE); ctx.stroke();
             }
         }
 
@@ -1315,13 +1317,12 @@
         }
 
         function drawSnakePath(prev, curr, progress) {
-            let vertices =[];
+            let vertices = [];
             let last = curr.length - 1;
             let prevLast = prev.length - 1;
             
             let tdx = curr[last].x - prev[prevLast].x;
             let tdy = curr[last].y - prev[prevLast].y;
-            
             let tWrap = Math.abs(tdx) > 1 || Math.abs(tdy) > 1;
             if (tWrap) {
                 if (tdx < -1) tdx = 1; else if (tdx > 1) tdx = -1;
@@ -1330,53 +1331,39 @@
             
             let tx = prev[prevLast].x + tdx * progress;
             let ty = prev[prevLast].y + tdy * progress;
-            
             vertices.push({ x: tx, y: ty });
             
             if (tWrap) {
                 vertices.push({ x: prev[prevLast].x + tdx, y: prev[prevLast].y + tdy });
-                let incomingTx = curr[last].x - tdx * (1 - progress);
-                let incomingTy = curr[last].y - tdy * (1 - progress);
-                vertices.push({ x: incomingTx, y: incomingTy, break: true });
+                vertices.push({ x: curr[last].x - tdx * (1 - progress), y: curr[last].y - tdy * (1 - progress), break: true });
             }
 
             for (let i = last; i >= 2; i--) {
                 vertices.push({ x: curr[i].x, y: curr[i].y });
-                
                 let bdx = curr[i-1].x - curr[i].x;
                 let bdy = curr[i-1].y - curr[i].y;
                 if (Math.abs(bdx) > 1 || Math.abs(bdy) > 1) {
                     if (bdx < -1) bdx = 1; else if (bdx > 1) bdx = -1;
                     if (bdy < -1) bdy = 1; else if (bdy > 1) bdy = -1;
-                    
                     vertices.push({ x: curr[i].x + bdx, y: curr[i].y + bdy });
                     vertices.push({ x: curr[i-1].x - bdx, y: curr[i-1].y - bdy, break: true });
                 }
             }
             
-            if (last >= 1) {
-                vertices.push({ x: curr[1].x, y: curr[1].y });
-            }
+            if (last >= 1) vertices.push({ x: curr[1].x, y: curr[1].y });
 
             let hdx = curr[0].x - curr[1].x;
             let hdy = curr[0].y - curr[1].y;
             let hWrap = Math.abs(hdx) > 1 || Math.abs(hdy) > 1;
-            
             let hx, hy;
+            
             if (hWrap) {
                 if (hdx < -1) hdx = 1; else if (hdx > 1) hdx = -1;
                 if (hdy < -1) hdy = 1; else if (hdy > 1) hdy = -1;
-                
-                let hx_off = curr[1].x + hdx * progress;
-                let hy_off = curr[1].y + hdy * progress;
-                vertices.push({ x: hx_off, y: hy_off });
-                
-                let incomingHx = curr[0].x - hdx * (1 - progress);
-                let incomingHy = curr[0].y - hdy * (1 - progress);
-                vertices.push({ x: incomingHx, y: incomingHy, break: true });
-                
-                hx = incomingHx;
-                hy = incomingHy;
+                vertices.push({ x: curr[1].x + hdx * progress, y: curr[1].y + hdy * progress });
+                hx = curr[0].x - hdx * (1 - progress);
+                hy = curr[0].y - hdy * (1 - progress);
+                vertices.push({ x: hx, y: hy, break: true });
             } else {
                 hx = curr[1].x + hdx * progress;
                 hy = curr[1].y + hdy * progress;
@@ -1388,8 +1375,7 @@
                 ctx.moveTo((vertices[0].x + 0.5) * TILE_SIZE, (vertices[0].y + 0.5) * TILE_SIZE);
                 for (let i = 1; i < vertices.length; i++) {
                     if (vertices[i].break) {
-                        ctx.stroke();
-                        ctx.beginPath();
+                        ctx.stroke(); ctx.beginPath();
                         ctx.moveTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
                     } else {
                         ctx.lineTo((vertices[i].x + 0.5) * TILE_SIZE, (vertices[i].y + 0.5) * TILE_SIZE);
@@ -1398,33 +1384,24 @@
                 ctx.stroke();
             };
 
-            ctx.strokeStyle = '#81C784'; 
-            ctx.lineWidth = TILE_SIZE * 0.8; 
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
+            ctx.strokeStyle = '#81C784'; ctx.lineWidth = TILE_SIZE * 0.8; 
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
             drawBrokenPath();
 
             ctx.save();
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            
-            ctx.strokeStyle = '#66BB6A'; 
-            ctx.lineWidth = TILE_SIZE * 0.5; 
-            ctx.setLineDash([TILE_SIZE * 0.3, TILE_SIZE * 0.7]);
-            ctx.lineDashOffset = TILE_SIZE * 0.15;
+            ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            ctx.strokeStyle = '#66BB6A'; ctx.lineWidth = TILE_SIZE * 0.5; 
+            ctx.setLineDash([TILE_SIZE * 0.3, TILE_SIZE * 0.7]); ctx.lineDashOffset = TILE_SIZE * 0.15;
             drawBrokenPath();
 
-            ctx.strokeStyle = '#388E3C'; 
-            ctx.lineWidth = TILE_SIZE * 0.2; 
-            ctx.setLineDash([TILE_SIZE * 0.1, TILE_SIZE * 0.9]);
-            ctx.lineDashOffset = TILE_SIZE * 0.05;
+            ctx.strokeStyle = '#388E3C'; ctx.lineWidth = TILE_SIZE * 0.2; 
+            ctx.setLineDash([TILE_SIZE * 0.1, TILE_SIZE * 0.9]); ctx.lineDashOffset = TILE_SIZE * 0.05;
             drawBrokenPath();
             ctx.restore();
 
             ctx.beginPath();
             ctx.arc((hx + 0.5) * TILE_SIZE, (hy + 0.5) * TILE_SIZE, (TILE_SIZE * 0.8) / 2, 0, Math.PI * 2);
-            ctx.fillStyle = '#4CAF50'; 
-            ctx.fill();
+            ctx.fillStyle = '#4CAF50'; ctx.fill();
 
             let eyeHdx = curr[0].x - curr[1].x;
             let eyeHdy = curr[0].y - curr[1].y;
@@ -1435,54 +1412,41 @@
             ctx.save();
             ctx.translate((hx + 0.5) * TILE_SIZE, (hy + 0.5) * TILE_SIZE);
             ctx.rotate(angle);
-
             ctx.fillStyle = '#FFFFFF';
             ctx.beginPath();
             ctx.arc(TILE_SIZE * 0.1, -TILE_SIZE * 0.2, TILE_SIZE * 0.12, 0, Math.PI * 2);
             ctx.arc(TILE_SIZE * 0.1, TILE_SIZE * 0.2, TILE_SIZE * 0.12, 0, Math.PI * 2);
             ctx.fill();
-
             ctx.fillStyle = '#000000';
             ctx.beginPath();
             ctx.arc(TILE_SIZE * 0.14, -TILE_SIZE * 0.2, TILE_SIZE * 0.06, 0, Math.PI * 2);
             ctx.arc(TILE_SIZE * 0.14, TILE_SIZE * 0.2, TILE_SIZE * 0.06, 0, Math.PI * 2);
             ctx.fill();
-
             ctx.restore();
         }
 
         function renderStaticFrame() {
-            clearCanvas();
-            drawGrid();
-            drawApples();
-            drawSnakeStatic();
+            clearCanvas(); drawGrid(); drawApples(); drawSnakeStatic();
         }
 
         function createApple(isFirst = false) {
             if (isFirst) {
                 let newApple = { x: snake[0].x + 3, y: snake[0].y };
                 if (newApple.x >= COLS) newApple.x = COLS - 1;
-                
                 let onSnake = snake.some(part => part.x === newApple.x && part.y === newApple.y);
                 let onApple = apples.some(a => a.x === newApple.x && a.y === newApple.y);
                 if (!onSnake && !onApple) return newApple;
             }
 
-            let freeSpots =[];
+            let freeSpots = [];
             for (let x = 0; x < COLS; x++) {
                 for (let y = 0; y < ROWS; y++) {
-                    let onSnake = snake.some(part => part.x === x && part.y === y);
-                    let onApple = apples.some(a => a.x === x && a.y === y);
-                    
-                    if (!onSnake && !onApple) {
-                        freeSpots.push({ x: x, y: y });
+                    if (!snake.some(p => p.x === x && p.y === y) && !apples.some(a => a.x === x && a.y === y)) {
+                        freeSpots.push({ x, y });
                     }
                 }
             }
-
-            if (freeSpots.length === 0) return null; 
-
-            return freeSpots[Math.floor(Math.random() * freeSpots.length)];
+            return freeSpots.length === 0 ? null : freeSpots[Math.floor(Math.random() * freeSpots.length)];
         }
 
         function drawApples() {
@@ -1492,17 +1456,14 @@
                 } else {
                     ctx.beginPath();
                     ctx.arc((apple.x + 0.5) * TILE_SIZE, (apple.y + 0.5) * TILE_SIZE, (TILE_SIZE * 0.7) / 2, 0, Math.PI * 2);
-                    ctx.fillStyle = '#ff4c4c';
-                    ctx.fill();
+                    ctx.fillStyle = '#ff4c4c'; ctx.fill();
                 }
             });
         }
 
         document.addEventListener('keydown', function(event) {
             if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
-                if (document.activeElement.tagName !== 'INPUT') {
-                    event.preventDefault(); 
-                }
+                if (document.activeElement.tagName !== 'INPUT') event.preventDefault(); 
             }
 
             if (event.code === 'Escape') {
@@ -1513,16 +1474,14 @@
                                   gameOverScreen.style.display !== 'flex' &&
                                   winScreen.style.display !== 'flex';
                 if (isPlaying) {
-                    if (isPaused) {
-                        resumeGame();
-                    } else {
-                        pauseGame();
-                    }
+                    if (isPaused) resumeGame(); else pauseGame();
                     return;
                 }
             }
 
-            if (gameOverScreen.style.display === 'flex' || startScreen.style.display === 'flex' || settingsScreen.style.display === 'flex' || gamemodesScreen.style.display === 'flex' || accountScreen.style.display === 'flex' || winScreen.style.display === 'flex' || isPaused) {
+            if (gameOverScreen.style.display === 'flex' || startScreen.style.display === 'flex' ||
+                settingsScreen.style.display === 'flex' || gamemodesScreen.style.display === 'flex' ||
+                accountScreen.style.display === 'flex' || winScreen.style.display === 'flex' || isPaused) {
                 return;
             }
             
@@ -1531,30 +1490,21 @@
             
             if (directionQueue.length > 0) {
                 const lastMove = directionQueue[directionQueue.length - 1];
-                currentDx = lastMove.dx;
-                currentDy = lastMove.dy;
+                currentDx = lastMove.dx; currentDy = lastMove.dy;
             } else {
                 currentDx = snake[0].x - snake[1].x;
                 currentDy = snake[0].y - snake[1].y;
             }
 
-            let newDx = 0;
-            let newDy = 0;
-            let valid = false;
+            let newDx = 0, newDy = 0, valid = false;
 
-            if ((keyPressed === 37 || keyPressed === 65) && currentDx !== 1) {
-                newDx = -1; newDy = 0; valid = true;
-            } else if ((keyPressed === 38 || keyPressed === 87) && currentDy !== 1) {
-                newDx = 0; newDy = -1; valid = true;
-            } else if ((keyPressed === 39 || keyPressed === 68) && currentDx !== -1) {
-                newDx = 1; newDy = 0; valid = true;
-            } else if ((keyPressed === 40 || keyPressed === 83) && currentDy !== -1) {
-                newDx = 0; newDy = 1; valid = true;
-            }
+            if ((keyPressed === 37 || keyPressed === 65) && currentDx !== 1)        { newDx = -1; newDy =  0; valid = true; }
+            else if ((keyPressed === 38 || keyPressed === 87) && currentDy !== 1)   { newDx =  0; newDy = -1; valid = true; }
+            else if ((keyPressed === 39 || keyPressed === 68) && currentDx !== -1)  { newDx =  1; newDy =  0; valid = true; }
+            else if ((keyPressed === 40 || keyPressed === 83) && currentDy !== -1)  { newDx =  0; newDy =  1; valid = true; }
             
             if (valid) {
                 const isStationary = (dx === 0 && dy === 0 && directionQueue.length === 0);
-                
                 if (isStationary || currentDx !== newDx || currentDy !== newDy) {
                     if (directionQueue.length < 3) {
                         directionQueue.push({ dx: newDx, dy: newDy });
@@ -1562,11 +1512,7 @@
                         moveClone.play().catch(e => {});
                     }
                 }
-
-                if (isStationary) {
-                    lastTickTime = performance.now();
-                    updateLogic();
-                }
+                if (isStationary) { lastTickTime = performance.now(); updateLogic(); }
             }
         });
 
@@ -1612,23 +1558,17 @@
         gamemodeRows.forEach(row => {
             row.addEventListener('click', () => {
                 const mode = row.getAttribute('data-mode');
-                
                 if (mode === 'Normal') {
                     activeGamemodes = ['Normal'];
                 } else {
                     activeGamemodes = activeGamemodes.filter(m => m !== 'Normal');
-                    
                     if (activeGamemodes.includes(mode)) {
                         activeGamemodes = activeGamemodes.filter(m => m !== mode);
                     } else {
                         activeGamemodes.push(mode);
                     }
-                    
-                    if (activeGamemodes.length === 0) {
-                        activeGamemodes = ['Normal'];
-                    }
+                    if (activeGamemodes.length === 0) activeGamemodes = ['Normal'];
                 }
-                
                 updateGamemodeUI();
                 saveSettings();
             });
@@ -1656,19 +1596,13 @@
         // MOBILE TOUCH / SWIPE SUPPORT
         // ================================================================
 
-        let touchStartX = 0;
-        let touchStartY = 0;
-        let touchStartTime = 0;
-        const SWIPE_MIN_DIST = 20;   
-        const TAP_MAX_DIST   = 12;   
-        const TAP_MAX_MS     = 250;  
-
+        let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+        const SWIPE_MIN_DIST = 20, TAP_MAX_DIST = 12, TAP_MAX_MS = 250;
         const canvasWrapper = document.getElementById('canvas-wrapper');
 
         canvasWrapper.addEventListener('touchstart', (e) => {
             const t = e.changedTouches[0];
-            touchStartX    = t.clientX;
-            touchStartY    = t.clientY;
+            touchStartX = t.clientX; touchStartY = t.clientY;
             touchStartTime = performance.now();
             e.preventDefault();
         }, { passive: false });
@@ -1681,40 +1615,30 @@
             const elapsed = performance.now() - touchStartTime;
 
             e.preventDefault();
-
             if (!isGameplayActive() || isPaused) return;
 
             if (dist < TAP_MAX_DIST && elapsed < TAP_MAX_MS) {
                 if (isPaused) resumeGame(); else pauseGame();
                 return;
             }
-
-            if (dist < SWIPE_MIN_DIST) return; 
+            if (dist < SWIPE_MIN_DIST) return;
 
             let newDx = 0, newDy = 0;
-            if (Math.abs(swipeDx) >= Math.abs(swipeDy)) {
-                newDx = swipeDx > 0 ? 1 : -1;
-            } else {
-                newDy = swipeDy > 0 ? 1 : -1;
-            }
+            if (Math.abs(swipeDx) >= Math.abs(swipeDy)) newDx = swipeDx > 0 ? 1 : -1;
+            else newDy = swipeDy > 0 ? 1 : -1;
 
             let currentDx, currentDy;
             if (directionQueue.length > 0) {
                 const last = directionQueue[directionQueue.length - 1];
                 currentDx = last.dx; currentDy = last.dy;
             } else if (snake.length >= 2) {
-                currentDx = snake[0].x - snake[1].x;
-                currentDy = snake[0].y - snake[1].y;
-            } else {
-                currentDx = dx; currentDy = dy;
-            }
+                currentDx = snake[0].x - snake[1].x; currentDy = snake[0].y - snake[1].y;
+            } else { currentDx = dx; currentDy = dy; }
 
-            const reversal = (newDx !== 0 && newDx === -currentDx) ||
-                             (newDy !== 0 && newDy === -currentDy);
+            const reversal = (newDx !== 0 && newDx === -currentDx) || (newDy !== 0 && newDy === -currentDy);
             if (reversal) return;
 
             const isStationary = (dx === 0 && dy === 0 && directionQueue.length === 0);
-
             if (isStationary || currentDx !== newDx || currentDy !== newDy) {
                 if (directionQueue.length < 3) {
                     directionQueue.push({ dx: newDx, dy: newDy });
@@ -1722,10 +1646,7 @@
                     mc.play().catch(() => {});
                 }
             }
-            if (isStationary) {
-                lastTickTime = performance.now();
-                updateLogic();
-            }
+            if (isStationary) { lastTickTime = performance.now(); updateLogic(); }
         }, { passive: false });
 
         canvasWrapper.addEventListener('contextmenu', e => e.preventDefault());
@@ -1734,43 +1655,35 @@
         // GAMEPAD / CONTROLLER SUPPORT
         // ================================================================
 
-        const cursorEl    = document.getElementById('controller-cursor');
+        const cursorEl = document.getElementById('controller-cursor');
         const gameContainer = document.getElementById('game-container');
 
         let cursorPos = { x: 0, y: 0 };
-        let gpLastButtons = {};        
-        let gpStickTriggered = false;  
-        let gpStickInNeutral = true;   
+        let gpLastButtons = {};
+        let gpStickInNeutral = true;
 
-        const STICK_DEAD   = 0.25;   
-        const STICK_THRESH = 0.55;   
-        const CURSOR_SPD   = 8;      
+        const STICK_DEAD = 0.25, STICK_THRESH = 0.55, CURSOR_SPD = 8;
 
         function initCursor() {
-            cursorPos.x = gameContainer.offsetWidth  / 2;
+            cursorPos.x = gameContainer.offsetWidth / 2;
             cursorPos.y = gameContainer.offsetHeight / 2;
             applyCursorPos();
         }
 
         function applyCursorPos() {
             cursorEl.style.left = cursorPos.x + 'px';
-            cursorEl.style.top  = cursorPos.y + 'px';
+            cursorEl.style.top = cursorPos.y + 'px';
         }
 
         function isOnMenuScreen() {
-            return startScreen.style.display    === 'flex' ||
-                   settingsScreen.style.display  === 'flex' ||
-                   gamemodesScreen.style.display === 'flex' ||
-                   accountScreen.style.display   === 'flex' ||
-                   gameOverScreen.style.display  === 'flex' ||
-                   winScreen.style.display       === 'flex';
+            return startScreen.style.display === 'flex' || settingsScreen.style.display === 'flex' ||
+                   gamemodesScreen.style.display === 'flex' || accountScreen.style.display === 'flex' ||
+                   gameOverScreen.style.display === 'flex' || winScreen.style.display === 'flex';
         }
 
         function isGameplayActive() {
-            return !isOnMenuScreen() &&
-                   gameOverScreen.style.display  !== 'flex' &&
-                   winScreen.style.display       !== 'flex' &&
-                   pauseScreen.style.display     !== 'flex';
+            return !isOnMenuScreen() && gameOverScreen.style.display !== 'flex' &&
+                   winScreen.style.display !== 'flex' && pauseScreen.style.display !== 'flex';
         }
 
         function btnJustPressed(gp, idx) {
@@ -1781,66 +1694,49 @@
 
         function pollGamepad() {
             requestAnimationFrame(pollGamepad);
-
-            const gamepads = navigator.getGamepads ? navigator.getGamepads() :[];
+            const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
             let gp = null;
-            for (let i = 0; i < gamepads.length; i++) {
-                if (gamepads[i]) { gp = gamepads[i]; break; }
-            }
+            for (let i = 0; i < gamepads.length; i++) { if (gamepads[i]) { gp = gamepads[i]; break; } }
             if (!gp) return;
 
-            const cw = gameContainer.offsetWidth;
-            const ch = gameContainer.offsetHeight;
-
-            const rawX = gp.axes[0] || 0;
-            const rawY = gp.axes[1] || 0;
+            const cw = gameContainer.offsetWidth, ch = gameContainer.offsetHeight;
+            const rawX = gp.axes[0] || 0, rawY = gp.axes[1] || 0;
             const axX = Math.abs(rawX) > STICK_DEAD ? rawX : 0;
             const axY = Math.abs(rawY) > STICK_DEAD ? rawY : 0;
-
             const isTyping = document.activeElement && document.activeElement.tagName === 'INPUT';
 
             if (isOnMenuScreen()) {
                 cursorEl.style.display = 'block';
-
                 cursorPos.x = Math.max(0, Math.min(cw, cursorPos.x + axX * CURSOR_SPD));
                 cursorPos.y = Math.max(0, Math.min(ch, cursorPos.y + axY * CURSOR_SPD));
                 applyCursorPos();
 
                 if (btnJustPressed(gp, 0) && !isTyping) {
                     const rect = gameContainer.getBoundingClientRect();
-                    const el = document.elementFromPoint(
-                        rect.left + cursorPos.x,
-                        rect.top  + cursorPos.y
-                    );
+                    const el = document.elementFromPoint(rect.left + cursorPos.x, rect.top + cursorPos.y);
                     if (el) {
                         const clickable = el.closest ? el.closest('.action-btn, .gamemode-btn') : el;
-                        if (clickable) clickable.click();
-                        else el.click();
+                        if (clickable) clickable.click(); else el.click();
                     }
                 }
 
                 if (btnJustPressed(gp, 1)) {
-                    if (settingsScreen.style.display === 'flex')  settingsBackBtn.click();
+                    if (settingsScreen.style.display === 'flex') settingsBackBtn.click();
                     else if (gamemodesScreen.style.display === 'flex') gamemodesBackBtn.click();
                     else if (accountScreen.style.display === 'flex') accountBackBtn.click();
                 }
-
             } else {
                 cursorEl.style.display = 'none';
             }
 
             if (isGameplayActive() && !isPaused) {
-                const dUp    = btnJustPressed(gp, 12);
-                const dDown  = btnJustPressed(gp, 13);
-                const dLeft  = btnJustPressed(gp, 14);
-                const dRight = btnJustPressed(gp, 15);
-
+                const dUp = btnJustPressed(gp, 12), dDown = btnJustPressed(gp, 13);
+                const dLeft = btnJustPressed(gp, 14), dRight = btnJustPressed(gp, 15);
                 let sUp = false, sDown = false, sLeft = false, sRight = false;
                 const mag = Math.sqrt(rawX * rawX + rawY * rawY);
 
-                if (mag < STICK_DEAD) {
-                    gpStickInNeutral = true;
-                } else if (gpStickInNeutral && mag >= STICK_THRESH) {
+                if (mag < STICK_DEAD) { gpStickInNeutral = true; }
+                else if (gpStickInNeutral && mag >= STICK_THRESH) {
                     gpStickInNeutral = false;
                     if (Math.abs(rawX) >= Math.abs(rawY)) {
                         if (rawX > 0) sRight = true; else sLeft = true;
@@ -1854,14 +1750,10 @@
                     const last = directionQueue[directionQueue.length - 1];
                     currentDx = last.dx; currentDy = last.dy;
                 } else if (snake.length >= 2) {
-                    currentDx = snake[0].x - snake[1].x;
-                    currentDy = snake[0].y - snake[1].y;
-                } else {
-                    currentDx = dx; currentDy = dy;
-                }
+                    currentDx = snake[0].x - snake[1].x; currentDy = snake[0].y - snake[1].y;
+                } else { currentDx = dx; currentDy = dy; }
 
                 let newDx = 0, newDy = 0, valid = false;
-
                 if      ((dLeft  || sLeft)  && currentDx !== 1)  { newDx = -1; newDy =  0; valid = true; }
                 else if ((dRight || sRight) && currentDx !== -1) { newDx =  1; newDy =  0; valid = true; }
                 else if ((dUp    || sUp)    && currentDy !== 1)  { newDx =  0; newDy = -1; valid = true; }
@@ -1876,24 +1768,16 @@
                             mc.play().catch(() => {});
                         }
                     }
-                    if (isStationary) {
-                        lastTickTime = performance.now();
-                        updateLogic();
-                    }
+                    if (isStationary) { lastTickTime = performance.now(); updateLogic(); }
                 }
             }
 
             if (btnJustPressed(gp, 9) || btnJustPressed(gp, 8) || btnJustPressed(gp, 2)) {
-                if (isGameplayActive()) {
-                    pauseGame();
-                } else if (pauseScreen.style.display === 'flex') {
-                    resumeGame();
-                }
+                if (isGameplayActive()) pauseGame();
+                else if (pauseScreen.style.display === 'flex') resumeGame();
             }
 
-            if (pauseScreen.style.display === 'flex' && btnJustPressed(gp, 0)) {
-                resumeGame();
-            }
+            if (pauseScreen.style.display === 'flex' && btnJustPressed(gp, 0)) resumeGame();
 
             const snap = {};
             gp.buttons.forEach((b, i) => { snap[i] = b.pressed; });
@@ -1902,8 +1786,7 @@
 
         window.addEventListener('gamepadconnected', (e) => {
             console.log('🎮 Gamepad connected:', e.gamepad.id);
-            gpLastButtons   = {};
-            gpStickInNeutral = true;
+            gpLastButtons = {}; gpStickInNeutral = true;
             badgeEl.classList.add('visible');
         });
 
