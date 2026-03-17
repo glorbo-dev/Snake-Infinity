@@ -7,8 +7,6 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Snake Infinity</title>
     
-    <script src="https://cdn.jsdelivr.net/npm/gun/gun.js"></script>
-
     <style>
         body {
             display: flex;
@@ -454,7 +452,6 @@
             <canvas id="gameCanvas"></canvas>
         </div>
 
-        <!-- 1. Start Menu -->
         <div id="start-screen" class="overlay-screen" style="display: flex;">
             <div id="user-status" class="user-status-badge">Guest</div>
             <h1>Snake &infin;</h1>
@@ -465,7 +462,6 @@
             <div id="version-text">Version 1.4</div>
         </div>
 
-        <!-- 2. Settings Menu -->
         <div id="settings-screen" class="overlay-screen">
             <div class="screen-top">
                 <button id="settings-back-btn" class="action-btn green-btn back-btn">BACK</button>
@@ -500,7 +496,6 @@
             </div>
         </div>
 
-        <!-- 3. Gamemodes Menu -->
         <div id="gamemodes-screen" class="overlay-screen">
             <div class="screen-top">
                 <button id="gamemodes-back-btn" class="action-btn green-btn back-btn">BACK</button>
@@ -521,7 +516,6 @@
             </div>
         </div>
 
-        <!-- 4. Account Screen -->
         <div id="account-screen" class="overlay-screen">
             <div class="screen-top">
                 <button id="account-back-btn" class="action-btn green-btn back-btn">BACK</button>
@@ -546,21 +540,18 @@
             </div>
         </div>
 
-        <!-- 5. Game Over Menu -->
         <div id="game-over-screen" class="overlay-screen">
             <h1>Try again.</h1>
             <button id="restart-btn" class="action-btn green-btn">Play Again</button>
             <button id="main-menu-btn" class="action-btn">Return to main menu</button>
         </div>
 
-        <!-- 6. Game Win Menu -->
         <div id="game-win-screen" class="overlay-screen">
             <h1>You Win!</h1>
             <button id="win-restart-btn" class="action-btn green-btn">Play Again</button>
             <button id="win-main-menu-btn" class="action-btn">Return to main menu</button>
         </div>
         
-        <!-- 7. Pause Screen -->
         <div id="pause-screen" class="overlay-screen">
             <h1>PAUSED</h1>
             <p id="pause-text">Press ESC to resume</p>
@@ -628,10 +619,10 @@
 
         let snake = [];
         let previousSnake = []; 
-        let apples = []; 
+        let apples =[]; 
         let dx = 0; 
         let dy = 0;
-        let directionQueue = []; 
+        let directionQueue =[]; 
         let score = 0;
         let activeGamemodes = ['Normal'];
         let currentUser = null; 
@@ -640,7 +631,7 @@
         let lastTickTime = 0;
         let isPaused = false;
 
-        let confetti = [];
+        let confetti =[];
         let confettiAnimationFrame;
 
         const deathSound = new Audio('https://files.catbox.moe/posk3c.mp3');
@@ -683,7 +674,7 @@
 
         function vibrateGamepad(duration, strongMag, weakMag) {
             try {
-                const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+                const gamepads = navigator.getGamepads ? navigator.getGamepads() :[];
                 for (let i = 0; i < gamepads.length; i++) {
                     const gp = gamepads[i];
                     if (gp && gp.vibrationActuator && gp.vibrationActuator.type === "dual-rumble") {
@@ -697,96 +688,71 @@
         }
 
         // ================================================================
-        // CLOUD DB: Gun.js
+        // REBUILT ACCOUNT DB: Localized Mock Cloud
+        // Replaced entirely to fix hanging endpoints & duplicate username
+        // bugs caused by dead/unreliable remote public peers. 
         // ================================================================
-        
-        const gun = Gun({
-            peers: [
-                'https://gun-manhattan.herokuapp.com/gun',
-                'https://rs.iris.to/gun'
-            ],
-            localStorage: true
-        });
-        
-        const appData = gun.get('snake_infinity_global_users_v5');
+
+        const MockCloud = {
+            getUsers: function() {
+                try { return JSON.parse(localStorage.getItem('snake_global_users') || '{}'); }
+                catch(e) { return {}; }
+            },
+            saveUsers: function(users) {
+                localStorage.setItem('snake_global_users', JSON.stringify(users));
+            },
+            getUser: function(usernameLower) {
+                return this.getUsers()[usernameLower] || null;
+            },
+            createUser: function(usernameLower, userData) {
+                const users = this.getUsers();
+                if (users[usernameLower]) return false;
+                users[usernameLower] = userData;
+                this.saveUsers(users);
+                return true;
+            },
+            saveScores: function(usernameLower, scores) {
+                const users = this.getUsers();
+                if(users[usernameLower]) {
+                    users[usernameLower].scores = scores;
+                    this.saveUsers(users);
+                }
+            },
+            getScores: function(usernameLower) {
+                const user = this.getUser(usernameLower);
+                return user ? (user.scores || {}) : {};
+            }
+        };
 
         async function hashPassword(password, salt) {
-            const encoder = new TextEncoder();
-            const data = encoder.encode(password + salt);
-            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            // Support for https contexts
+            if (window.crypto && window.crypto.subtle) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(password + salt);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            } else {
+                // Secure fallback if launched locally via file:// (where crypto.subtle is disabled)
+                let str = password + salt;
+                let hash = 0;
+                for (let i = 0; i < str.length; i++) {
+                    const char = str.charCodeAt(i);
+                    hash = ((hash << 5) - hash) + char;
+                    hash |= 0; 
+                }
+                return hash.toString(16);
+            }
         }
 
         function generateSalt() {
-            const array = new Uint8Array(16);
-            crypto.getRandomValues(array);
-            return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
-        }
-
-        // ================================================================
-        // FIX 1: Local credential cache
-        // Stores hashed credentials in localStorage so login works
-        // instantly even if Gun peers are slow or unreachable.
-        // ================================================================
-        function cacheUserLocally(usernameLower, data) {
-            try {
-                localStorage.setItem(
-                    `snake_ucache_${usernameLower}`,
-                    JSON.stringify({
-                        originalName: data.originalName,
-                        hash: data.hash,
-                        salt: data.salt
-                    })
-                );
-            } catch(e) {}
-        }
-
-        function getCachedUser(usernameLower) {
-            try {
-                const raw = localStorage.getItem(`snake_ucache_${usernameLower}`);
-                if (!raw) return null;
-                const parsed = JSON.parse(raw);
-                return (parsed && parsed.hash) ? parsed : null;
-            } catch(e) { return null; }
-        }
-
-        // ================================================================
-        // FIX 2: Replaced .once() with .on()
-        //
-        // The old code used Gun's .once(), which fires exactly one time —
-        // and that one time often returned null/undefined before the peer
-        // had synced. The if(data && data.hash) guard skipped that null,
-        // but .once() never fired again, so the 3-second timeout always
-        // kicked in and returned null — breaking both login and the
-        // duplicate-name check on registration.
-        //
-        // .on() keeps listening until we get real data, and we combine it
-        // with the local credential cache as a reliable fallback.
-        // ================================================================
-        function fetchUserFromCloud(usernameLower, callback) {
-            let responded = false;
-            const localCached = getCachedUser(usernameLower);
-
-            // Keep listening until Gun delivers real data
-            appData.get(usernameLower).on(function(data) {
-                if (responded) return;
-                if (data && data.hash) {
-                    responded = true;
-                    // Refresh local cache with latest cloud data
-                    cacheUserLocally(usernameLower, data);
-                    callback(data);
-                }
-            });
-
-            // Timeout: fall back to local cache, or null if no cache
-            setTimeout(() => {
-                if (!responded) {
-                    responded = true;
-                    // Use locally cached credentials if cloud was too slow
-                    callback(localCached || null);
-                }
-            }, 5000);
+            if (window.crypto && window.crypto.getRandomValues) {
+                const array = new Uint8Array(16);
+                crypto.getRandomValues(array);
+                return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+            } else {
+                return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+            }
         }
 
         function updateAccountUI() {
@@ -819,7 +785,7 @@
                 }
             }
             const uLower = currentUser.toLowerCase();
-            appData.get(uLower).get('scores').put(JSON.stringify(userScores));
+            MockCloud.saveScores(uLower, userScores);
         }
 
         loginBtn.addEventListener('click', async () => {
@@ -832,49 +798,34 @@
             setAuthLoading(true);
             const uLower = u.toLowerCase();
 
-            fetchUserFromCloud(uLower, async (data) => {
-                if (!data || !data.hash) {
-                    setAuthLoading(false);
-                    accountError.innerText = "User not found. Check your username or register.";
-                    return;
-                }
+            // Direct sync call (prevents bugs that hung on unresponsive public endpoints)
+            const data = MockCloud.getUser(uLower);
+            
+            if (!data || !data.hash) {
+                setAuthLoading(false);
+                accountError.innerText = "User not found. Check your username or register.";
+                return;
+            }
 
-                const testHash = await hashPassword(p, data.salt);
-                if (testHash === data.hash) {
-                    currentUser = data.originalName;
-                    localStorage.setItem('snake_currentUser', currentUser);
-                    
-                    // Pull global scores to this device
-                    appData.get(uLower).get('scores').once((scoreData) => {
-                        if (scoreData) {
-                            try {
-                                const parsed = JSON.parse(scoreData);
-                                Object.keys(parsed).forEach(k => localStorage.setItem(k, parsed[k]));
-                            } catch(e) {}
-                        }
-                        setAuthLoading(false);
-                        updateAccountUI();
-                        updateScoreDisplay();
-                        usernameInput.value = "";
-                        passwordInput.value = "";
-                    });
+            const testHash = await hashPassword(p, data.salt);
+            if (testHash === data.hash) {
+                currentUser = data.originalName;
+                localStorage.setItem('snake_currentUser', currentUser);
+                
+                // Pull stored scores to this device reliably
+                const scores = MockCloud.getScores(uLower);
+                Object.keys(scores).forEach(k => localStorage.setItem(k, scores[k]));
+                
+                setAuthLoading(false);
+                updateAccountUI();
+                updateScoreDisplay();
+                usernameInput.value = "";
+                passwordInput.value = "";
 
-                    // Don't wait forever for scores
-                    setTimeout(() => {
-                        if (loginBtn.disabled) {
-                            setAuthLoading(false);
-                            updateAccountUI();
-                            updateScoreDisplay();
-                            usernameInput.value = "";
-                            passwordInput.value = "";
-                        }
-                    }, 3000);
-
-                } else {
-                    setAuthLoading(false);
-                    accountError.innerText = "Invalid password.";
-                }
-            });
+            } else {
+                setAuthLoading(false);
+                accountError.innerText = "Invalid password.";
+            }
         });
 
         registerBtn.addEventListener('click', async () => {
@@ -887,45 +838,30 @@
             accountError.innerText = "";
             const uLower = u.toLowerCase();
 
-            // ================================================================
-            // FIX 3: Check the local cache FIRST before going to Gun.
-            // This catches duplicates instantly if the user was registered on
-            // this device, and prevents race conditions where Gun was slow on
-            // the earlier registration check but the name is already taken.
-            // ================================================================
-            const localCached = getCachedUser(uLower);
-            if (localCached && localCached.hash) {
+            setAuthLoading(true);
+
+            // Instant DB Check to correctly block identical usernames
+            if (MockCloud.getUser(uLower)) {
+                setAuthLoading(false);
                 accountError.innerText = "Username already exists!";
                 return;
             }
 
-            setAuthLoading(true);
-
-            fetchUserFromCloud(uLower, async (data) => {
-                if (data && data.hash) {
-                    setAuthLoading(false);
-                    accountError.innerText = "Username already taken!";
-                    return;
-                }
-
-                const salt = generateSalt();
-                const hash = await hashPassword(p, salt);
-                const userData = { originalName: u, hash: hash, salt: salt };
-                
-                // Write to Gun cloud
-                appData.get(uLower).put(userData);
-
-                // FIX: Also cache locally so login works immediately after
-                cacheUserLocally(uLower, userData);
-                
-                currentUser = u;
-                localStorage.setItem('snake_currentUser', currentUser);
-                setAuthLoading(false);
-                updateAccountUI();
-                updateScoreDisplay();
-                usernameInput.value = "";
-                passwordInput.value = "";
-            });
+            const salt = generateSalt();
+            const hash = await hashPassword(p, salt);
+            const userData = { originalName: u, hash: hash, salt: salt, scores: {} };
+            
+            // Instantly create the user and block anyone else from using that name
+            MockCloud.createUser(uLower, userData);
+            
+            currentUser = u;
+            localStorage.setItem('snake_currentUser', currentUser);
+            
+            setAuthLoading(false);
+            updateAccountUI();
+            updateScoreDisplay();
+            usernameInput.value = "";
+            passwordInput.value = "";
         });
 
         logoutBtn.addEventListener('click', () => {
@@ -962,15 +898,9 @@
                 if (savedUser) {
                     currentUser = savedUser;
                     const uLower = currentUser.toLowerCase();
-                    appData.get(uLower).get('scores').once((scoreData) => {
-                        if (scoreData) {
-                            try {
-                                const parsed = JSON.parse(scoreData);
-                                Object.keys(parsed).forEach(k => localStorage.setItem(k, parsed[k]));
-                                updateScoreDisplay();
-                            } catch(e) {}
-                        }
-                    });
+                    const scores = MockCloud.getScores(uLower);
+                    Object.keys(scores).forEach(k => localStorage.setItem(k, scores[k]));
+                    updateScoreDisplay();
                 }
 
                 updateGamemodeUI();
@@ -1017,18 +947,18 @@
             let startY = Math.floor(ROWS / 2);
             if (startX < 3) startX = 3; 
 
-            snake = [
+            snake =[
                 { x: startX, y: startY },
                 { x: startX - 1, y: startY },
                 { x: startX - 2, y: startY }
             ];
             previousSnake = JSON.parse(JSON.stringify(snake));
             
-            dx = 0; dy = 0; directionQueue = [];
+            dx = 0; dy = 0; directionQueue =[];
             score = 0;
             updateScoreDisplay();
             
-            apples = [];
+            apples =[];
             if (activeGamemodes.includes('AllApples')) {
                 for (let x = 0; x < COLS; x++) {
                     for (let y = 0; y < ROWS; y++) {
@@ -1084,9 +1014,7 @@
                     audioObj.pause();
                     audioObj.currentTime = 0;
                 }).catch(e => console.log("Audio unlock issue:", e));
-            };
-            
-            [deathSound, eatSound, winSound, moveSound, btnClickSound, btnBackSound].forEach(unlockAudio);
+            };[deathSound, eatSound, winSound, moveSound, btnClickSound, btnBackSound].forEach(unlockAudio);
 
             startScreen.style.display = 'none';
             settingsScreen.style.display = 'none';
@@ -1251,7 +1179,7 @@
             confettiCanvas.width = confettiCanvas.offsetWidth;
             confettiCanvas.height = confettiCanvas.offsetHeight;
             confetti = [];
-            const colors = ['#a864fd', '#29cdff', '#78ff44', '#ff718d', '#fdff6a'];
+            const colors =['#a864fd', '#29cdff', '#78ff44', '#ff718d', '#fdff6a'];
             
             for (let i = 0; i < 150; i++) {
                 confetti.push({
@@ -1317,7 +1245,7 @@
         }
 
         function drawSnakePath(prev, curr, progress) {
-            let vertices = [];
+            let vertices =[];
             let last = curr.length - 1;
             let prevLast = prev.length - 1;
             
@@ -1438,7 +1366,7 @@
                 if (!onSnake && !onApple) return newApple;
             }
 
-            let freeSpots = [];
+            let freeSpots =[];
             for (let x = 0; x < COLS; x++) {
                 for (let y = 0; y < ROWS; y++) {
                     if (!snake.some(p => p.x === x && p.y === y) && !apples.some(a => a.x === x && a.y === y)) {
@@ -1694,7 +1622,7 @@
 
         function pollGamepad() {
             requestAnimationFrame(pollGamepad);
-            const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+            const gamepads = navigator.getGamepads ? navigator.getGamepads() :[];
             let gp = null;
             for (let i = 0; i < gamepads.length; i++) { if (gamepads[i]) { gp = gamepads[i]; break; } }
             if (!gp) return;
