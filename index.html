@@ -459,7 +459,7 @@
             <button id="gamemodes-btn" class="action-btn green-btn">GAMEMODES</button>
             <button id="settings-btn" class="action-btn green-btn">SETTINGS</button>
             <button id="account-btn" class="action-btn green-btn">ACCOUNT</button>
-            <div id="version-text">Version 1.4</div>
+            <div id="version-text">Version 1.5 (Backend Connected)</div>
         </div>
 
         <div id="settings-screen" class="overlay-screen">
@@ -688,72 +688,11 @@
         }
 
         // ================================================================
-        // REBUILT ACCOUNT DB: Localized Mock Cloud
-        // Replaced entirely to fix hanging endpoints & duplicate username
-        // bugs caused by dead/unreliable remote public peers. 
+        // BACKEND CONNECTION LOGIC
+        // Communicates with your new Node.js local server at port 3000
         // ================================================================
 
-        const MockCloud = {
-            getUsers: function() {
-                try { return JSON.parse(localStorage.getItem('snake_global_users') || '{}'); }
-                catch(e) { return {}; }
-            },
-            saveUsers: function(users) {
-                localStorage.setItem('snake_global_users', JSON.stringify(users));
-            },
-            getUser: function(usernameLower) {
-                return this.getUsers()[usernameLower] || null;
-            },
-            createUser: function(usernameLower, userData) {
-                const users = this.getUsers();
-                if (users[usernameLower]) return false;
-                users[usernameLower] = userData;
-                this.saveUsers(users);
-                return true;
-            },
-            saveScores: function(usernameLower, scores) {
-                const users = this.getUsers();
-                if(users[usernameLower]) {
-                    users[usernameLower].scores = scores;
-                    this.saveUsers(users);
-                }
-            },
-            getScores: function(usernameLower) {
-                const user = this.getUser(usernameLower);
-                return user ? (user.scores || {}) : {};
-            }
-        };
-
-        async function hashPassword(password, salt) {
-            // Support for https contexts
-            if (window.crypto && window.crypto.subtle) {
-                const encoder = new TextEncoder();
-                const data = encoder.encode(password + salt);
-                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-                const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            } else {
-                // Secure fallback if launched locally via file:// (where crypto.subtle is disabled)
-                let str = password + salt;
-                let hash = 0;
-                for (let i = 0; i < str.length; i++) {
-                    const char = str.charCodeAt(i);
-                    hash = ((hash << 5) - hash) + char;
-                    hash |= 0; 
-                }
-                return hash.toString(16);
-            }
-        }
-
-        function generateSalt() {
-            if (window.crypto && window.crypto.getRandomValues) {
-                const array = new Uint8Array(16);
-                crypto.getRandomValues(array);
-                return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
-            } else {
-                return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-            }
-        }
+        const API_URL = 'http://localhost:3000/api';
 
         function updateAccountUI() {
             if (currentUser) {
@@ -775,7 +714,7 @@
             registerBtn.innerText = isLoading ? "WAIT..." : "REGISTER";
         }
 
-        function syncScoresToCloud() {
+        async function syncScoresToCloud() {
             if (!currentUser) return;
             let userScores = {};
             for (let i = 0; i < localStorage.length; i++) {
@@ -784,8 +723,15 @@
                     userScores[k] = localStorage.getItem(k);
                 }
             }
-            const uLower = currentUser.toLowerCase();
-            MockCloud.saveScores(uLower, userScores);
+            try {
+                await fetch(`${API_URL}/scores`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: currentUser, scores: userScores })
+                });
+            } catch(e) {
+                console.log("Could not sync scores right now.");
+            }
         }
 
         loginBtn.addEventListener('click', async () => {
@@ -796,25 +742,29 @@
 
             accountError.innerText = "";
             setAuthLoading(true);
-            const uLower = u.toLowerCase();
 
-            // Direct sync call (prevents bugs that hung on unresponsive public endpoints)
-            const data = MockCloud.getUser(uLower);
-            
-            if (!data || !data.hash) {
-                setAuthLoading(false);
-                accountError.innerText = "User not found. Check your username or register.";
-                return;
-            }
+            try {
+                const response = await fetch(`${API_URL}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                
+                const data = await response.json();
 
-            const testHash = await hashPassword(p, data.salt);
-            if (testHash === data.hash) {
-                currentUser = data.originalName;
+                if (!response.ok) {
+                    setAuthLoading(false);
+                    accountError.innerText = data.error || "Login failed.";
+                    return;
+                }
+
+                currentUser = data.username;
                 localStorage.setItem('snake_currentUser', currentUser);
                 
-                // Pull stored scores to this device reliably
-                const scores = MockCloud.getScores(uLower);
-                Object.keys(scores).forEach(k => localStorage.setItem(k, scores[k]));
+                // Load scores retrieved from database into local memory
+                if (data.scores) {
+                    Object.keys(data.scores).forEach(k => localStorage.setItem(k, data.scores[k]));
+                }
                 
                 setAuthLoading(false);
                 updateAccountUI();
@@ -822,9 +772,9 @@
                 usernameInput.value = "";
                 passwordInput.value = "";
 
-            } else {
+            } catch (error) {
                 setAuthLoading(false);
-                accountError.innerText = "Invalid password.";
+                accountError.innerText = "Error: Ensure the backend server is running.";
             }
         });
 
@@ -836,32 +786,36 @@
             if (u.toLowerCase() === 'guest') { accountError.innerText = "Reserved username."; return; }
 
             accountError.innerText = "";
-            const uLower = u.toLowerCase();
-
             setAuthLoading(true);
 
-            // Instant DB Check to correctly block identical usernames
-            if (MockCloud.getUser(uLower)) {
-                setAuthLoading(false);
-                accountError.innerText = "Username already exists!";
-                return;
-            }
+            try {
+                const response = await fetch(`${API_URL}/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                
+                const data = await response.json();
 
-            const salt = generateSalt();
-            const hash = await hashPassword(p, salt);
-            const userData = { originalName: u, hash: hash, salt: salt, scores: {} };
-            
-            // Instantly create the user and block anyone else from using that name
-            MockCloud.createUser(uLower, userData);
-            
-            currentUser = u;
-            localStorage.setItem('snake_currentUser', currentUser);
-            
-            setAuthLoading(false);
-            updateAccountUI();
-            updateScoreDisplay();
-            usernameInput.value = "";
-            passwordInput.value = "";
+                if (!response.ok) {
+                    setAuthLoading(false);
+                    accountError.innerText = data.error || "Registration failed.";
+                    return;
+                }
+
+                currentUser = data.username;
+                localStorage.setItem('snake_currentUser', currentUser);
+                
+                setAuthLoading(false);
+                updateAccountUI();
+                updateScoreDisplay();
+                usernameInput.value = "";
+                passwordInput.value = "";
+
+            } catch (error) {
+                setAuthLoading(false);
+                accountError.innerText = "Error: Ensure the backend server is running.";
+            }
         });
 
         logoutBtn.addEventListener('click', () => {
@@ -897,14 +851,14 @@
                 const savedUser = localStorage.getItem('snake_currentUser');
                 if (savedUser) {
                     currentUser = savedUser;
-                    const uLower = currentUser.toLowerCase();
-                    const scores = MockCloud.getScores(uLower);
-                    Object.keys(scores).forEach(k => localStorage.setItem(k, scores[k]));
-                    updateScoreDisplay();
+                    // Note: We don't automatically refetch scores on boot to save requests, 
+                    // they are stored locally from the last login. If you want cross-device instantly, 
+                    // the user will need to log out and log in again.
                 }
 
                 updateGamemodeUI();
                 updateAccountUI();
+                updateScoreDisplay();
             } catch(e) { console.warn("Could not load settings", e); }
         }
 
@@ -1140,7 +1094,7 @@
                 
                 if (score > currentHigh) {
                     localStorage.setItem(key, score);
-                    syncScoresToCloud();
+                    syncScoresToCloud(); // Syncs to the real backend server!
                 }
                 updateScoreDisplay();
                 
@@ -1178,7 +1132,7 @@
             const confettiCanvas = document.getElementById('confettiCanvas');
             confettiCanvas.width = confettiCanvas.offsetWidth;
             confettiCanvas.height = confettiCanvas.offsetHeight;
-            confetti = [];
+            confetti =[];
             const colors =['#a864fd', '#29cdff', '#78ff44', '#ff718d', '#fdff6a'];
             
             for (let i = 0; i < 150; i++) {
